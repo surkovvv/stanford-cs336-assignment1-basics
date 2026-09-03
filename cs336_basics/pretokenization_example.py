@@ -48,15 +48,125 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
+import regex as re
+from multiprocessing import Pool
 
-## Usage
-with open(..., "rb") as f:
-    num_processes = 4
-    boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+NUM_DEFAULT_TOKENS = 256
 
-    # The following is a serial implementation, but you can parallelize this
-    # by sending each start/end pair to a set of processes.
-    for start, end in zip(boundaries[:-1], boundaries[1:]):
+def pretokenize_chunk(path: str, start: int, end: int, special_tokens: list[str]) -> dict[bytes, int]:
+    with open(path, "rb") as f:
         f.seek(start)
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
-        # Run pre-tokenization on your chunk and store the counts for each pre-token
+
+    pretoken_counter: dict[str, int] = {}
+    for doc in re.split("|".join([re.escape(special_tokens)]), chunk):
+        for pretoken in re.finditer(PAT, doc):
+            pretoken = pretoken.group(0)
+            if pretoken not in pretoken_counter:
+                pretoken_counter[pretoken] = 0
+
+            pretoken_counter[pretoken] += 1
+
+    return pretoken_counter
+
+
+def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
+    with open(path, "rb") as f:
+        num_processes = 4
+        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+
+    tasks = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        tasks.append((path, start, end, special_tokens))
+
+    with Pool(processes=num_processes) as pool:
+        results = pool.starmap(pretokenize_chunk, tasks)
+
+    pretokens_counter = {}
+    for pretoken_counts4chunk in results:
+        pretokens_counter.update(pretoken_counts4chunk)
+
+    # print(pretokens_counter)
+    # print(special_tokens[0] in pretokens_counter)
+
+    pair_counters: dict[tuple[bytes, bytes], int] = {}
+    pair_to_pretokens: dict[tuple[bytes, bytes], set[str]] = {}
+    pretoken_to_current_view: dict[str, list[bytes]] = {}
+    for pretoken in pretokens_counter:
+        encoded_pretoken = pretoken.encode('utf-8')  # -> bytes, but not 1 by 1
+        tuple_of_bytes = tuple([encoded_pretoken[i: i + 1] for i in range(len(encoded_pretoken))])
+        pretoken_to_current_view[pretoken] = tuple_of_bytes
+        for idx in range(len(tuple_of_bytes) - 1):
+            pair = tuple_of_bytes[idx: idx + 2]
+            if pair not in pair_counters:
+                pair_counters[pair] = 0
+            pair_counters[pair] += 1
+
+            if pair not in pair_to_pretokens:
+                pair_to_pretokens[pair] = set()
+            pair_to_pretokens[pair].add(pretoken)
+
+    num_merges = vocab_size - len(special_tokens) - NUM_DEFAULT_TOKENS
+    # print(num_merges)
+    all_bytes = bytes(range(NUM_DEFAULT_TOKENS))
+    vocab = [all_bytes[i : i + 1] for i in range(NUM_DEFAULT_TOKENS)] + [st.encode("utf-8") for st in special_tokens]
+    merges: list[tuple[bytes, bytes]] = []
+
+    for _ in range(num_merges):
+        new_merge_pair = sorted(pair_counters, key=lambda x: (pair_counters[x], x))[-1]
+        new_merge_symbol = b''.join(new_merge_pair)
+
+        vocab.append(new_merge_symbol)
+        merges.append(new_merge_pair)
+
+        for pretoken in pair_to_pretokens[new_merge_pair]:
+            current_view = pretoken_to_current_view[pretoken]  # not splitted by pairs, just view
+            pairs_split = [current_view[idx: idx + 2] for idx in range(len(current_view) - 1)]
+            previous_pair_was_merged = False
+            merged_pairs_ids = []
+            merged_pair_counter = 0
+            for pair_idx, current_pair in enumerate(pairs_split):
+                if previous_pair_was_merged:
+                    previous_pair_was_merged = False
+                    continue
+                if current_pair == new_merge_pair:
+                    merged_pairs_ids.append(pair_idx)
+                    previous_pair_was_merged = True
+                    merged_pair_counter += 1
+                else:
+                    previous_pair_was_merged = False
+
+            new_view = []
+            prev_idx = 0
+            for idx in merged_pairs_ids:
+                new_view += list(current_view[prev_idx: idx]) + [new_merge_symbol]
+                prev_idx = idx + 2
+            
+            new_view += current_view[prev_idx:]
+            
+            pretoken_to_current_view[pretoken] = new_view
+            new_pairs_split = [tuple(new_view[idx: idx + 2]) for idx in range(len(new_view) - 1)]
+
+            pair_counters[new_merge_pair] -= merged_pair_counter
+            for curr_pair in new_pairs_split:
+                if new_merge_symbol in curr_pair:
+                    if curr_pair not in pair_counters:
+                        pair_counters[curr_pair] = 0
+                    pair_counters[curr_pair] += 1
+                    pair_to_pretokens[curr_pair] = pretoken
+            
+    return vocab, merges
+   
+
+if __name__ == "__main__":
+    path = "data/tsv2-test.txt"
+    special_tokens=["<|endoftext|>"]
+
+    vocab_size = 258
+
+    vocab, merges = main(path, special_tokens, vocab_size)
+
+    print(vocab)
+    print('=' * 100)
+    print(merges)

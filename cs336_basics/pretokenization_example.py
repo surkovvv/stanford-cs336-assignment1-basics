@@ -1,6 +1,11 @@
 import os
-from typing import BinaryIO
+import regex as re
 
+from typing import BinaryIO
+from multiprocessing import Pool
+
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+NUM_DEFAULT_TOKENS = 256
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -48,11 +53,6 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
-import regex as re
-from multiprocessing import Pool
-
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-NUM_DEFAULT_TOKENS = 256
 
 def pretokenize_chunk(path: str, start: int, end: int, special_tokens: list[str]) -> dict[bytes, int]:
     with open(path, "rb") as f:
@@ -79,10 +79,8 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
     tasks = []
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         tasks.append((path, start, end, special_tokens))
-
     with Pool(processes=num_processes) as pool:
         results = pool.starmap(pretokenize_chunk, tasks)
-
     pretokens_counter = {}
     for pretoken_counts4chunk in results:
         pretokens_counter.update(pretoken_counts4chunk)
@@ -91,8 +89,8 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
     # print(special_tokens[0] in pretokens_counter)
 
     pair_counters: dict[tuple[bytes, bytes], int] = {}
-    pair_to_pretokens: dict[tuple[bytes, bytes], set[str]] = {}
-    pretoken_to_current_view: dict[str, list[bytes]] = {}
+    pair_to_pretokens: dict[tuple[bytes, bytes], set[str]] = {}  # defaultdict pls
+    pretoken_to_current_view: dict[str, tuple[bytes, ...]] = {}
     for pretoken in pretokens_counter:
         encoded_pretoken = pretoken.encode('utf-8')  # -> bytes, but not 1 by 1
         tuple_of_bytes = tuple([encoded_pretoken[i: i + 1] for i in range(len(encoded_pretoken))])
@@ -108,13 +106,14 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
             pair_to_pretokens[pair].add(pretoken)
 
     num_merges = vocab_size - len(special_tokens) - NUM_DEFAULT_TOKENS
-    # print(num_merges)
     all_bytes = bytes(range(NUM_DEFAULT_TOKENS))
     vocab = [all_bytes[i : i + 1] for i in range(NUM_DEFAULT_TOKENS)] + [st.encode("utf-8") for st in special_tokens]
     merges: list[tuple[bytes, bytes]] = []
 
     for _ in range(num_merges):
-        new_merge_pair = sorted(pair_counters, key=lambda x: (pair_counters[x], x))[-1]
+        sorted_pairs = sorted(pair_counters, key=lambda x: (pair_counters[x], x))
+        new_merge_pair = sorted_pairs[-1]
+        print(sorted_pairs[-2:])
         new_merge_symbol = b''.join(new_merge_pair)
 
         vocab.append(new_merge_symbol)
@@ -137,16 +136,16 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
                 else:
                     previous_pair_was_merged = False
 
-            new_view = []
+            new_view = tuple()
             prev_idx = 0
             for idx in merged_pairs_ids:
-                new_view += list(current_view[prev_idx: idx]) + [new_merge_symbol]
+                new_view += current_view[prev_idx: idx] + (new_merge_symbol, )
                 prev_idx = idx + 2
             
             new_view += current_view[prev_idx:]
             
             pretoken_to_current_view[pretoken] = new_view
-            new_pairs_split = [tuple(new_view[idx: idx + 2]) for idx in range(len(new_view) - 1)]
+            new_pairs_split = [new_view[idx: idx + 2] for idx in range(len(new_view) - 1)]
 
             pair_counters[new_merge_pair] -= merged_pair_counter
             for curr_pair in new_pairs_split:
@@ -157,9 +156,15 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
                     pair_to_pretokens[curr_pair] = pretoken
             
     return vocab, merges
-   
+
+
+# def test_pretoken_counter():
+#     pretoken_counter = pretokenize_chunk(path="data/tsv2-test.txt", start=0, end=1110, special_tokens="<|endoftext|>")
+    
+
 
 if __name__ == "__main__":
+    # test_pretoken_counter()
     path = "data/tsv2-test.txt"
     special_tokens=["<|endoftext|>"]
 

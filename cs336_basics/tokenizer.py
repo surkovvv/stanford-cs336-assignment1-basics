@@ -123,40 +123,65 @@ vocab = bpe_example(corpus)
 # print(test_tuple[:5] + ('am',) + test_tuple[5 + 2:])
 # print(vocab[-6:])
 
-import os
-
-from pretokenization_example import find_chunk_boundaries
-
-
-def pretokenize_chunk() -> tokens:
-    pass
+from pretokenization_example import main
+import pickle
 
 
-def run_train_bpe(
-    input_path: str | os.PathLike,
-    vocab_size: int,
-    special_tokens: list[str],
-    **kwargs,
-) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    """Given the path to an input corpus, run train a BPE tokenizer and
-    output its vocabulary and merges.
+def train_tokenizer(path, vocab_size, special_tokens, output_path):
+    vocab, merges = main(path, special_tokens, vocab_size)
+    with open(output_path, "wb") as f:
+        pickle.dump(
+            {
+            "vocab": vocab,
+            "merges": merges,
+            },
+            f,
+        )
 
-    Args:
-        input_path (str | os.PathLike): Path to BPE tokenizer training data.
-        vocab_size (int): Total number of items in the tokenizer's vocabulary (including special tokens).
-        special_tokens (list[str]): A list of string special tokens to be added to the tokenizer vocabulary.
-            These strings will never be split into multiple tokens, and will always be
-            kept as a single token. If these special tokens occur in the `input_path`,
-            they are treated as any other string.
+if __name__ == "__main__":
+    # path = "data/TinyStoriesV2-GPT4-train.txt" # "data/TinyStoriesV2-GPT4-train.txt"
+    # vocab_size = 10_000
+    # special_tokens = ["<|endoftext|>"]
+    # output_path = "data/results/TinyStoriesV2-train-bpe_tokenizer.pkl"
+    # train_tokenizer(path, vocab_size, special_tokens, output_path)
 
-    Returns:
-        tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-            vocab:
-                The trained tokenizer vocabulary, a mapping from int (token ID in the vocabulary)
-                to bytes (token bytes)
-            merges:
-                BPE merges. Each list item is a tuple of bytes (<token1>, <token2>),
-                representing that <token1> was merged with <token2>.
-                Merges are ordered by order of creation.
-    """
-    raise NotImplementedError
+#     uv run python -c "import pstats; pstats.Stats('profile.prof').sort_stats('cumulative').print_stats(25)"
+# Sat Sep  5 20:58:35 2026    profile.prof
+
+#          492998063 function calls (492997434 primitive calls) in 76.148 seconds
+
+#    Ordered by: cumulative time
+#    List reduced from 864 to 25 due to restriction <25>
+
+#    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+#      46/1    0.000    0.000   76.148   76.148 {built-in method builtins.exec}
+#         1    0.000    0.000   76.148   76.148 cs336_basics/tokenizer.py:1(<module>)
+#         1    0.012    0.012   76.132   76.132 cs336_basics/tokenizer.py:130(train_tokenizer)
+#         1    0.985    0.985   76.118   76.118 /Users/tr3n1ttty/code projects/preps/cs 336/stanford-cs336-assignment1-basics/cs336_basics/pretokenization_example.py:74(main)
+#     15227   29.677    0.002   54.562    0.004 {built-in method builtins.max}
+#     30/26    0.000    0.000   40.329    1.551 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/connection.py:395(_recv)
+#     78/74   20.018    0.257   40.329    0.545 {built-in method posix.read}
+#        13    0.000    0.000   39.781    3.060 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/connection.py:251(recv)
+#     15/13    0.000    0.000   39.758    3.058 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/connection.py:434(_recv_bytes)
+# 490180425   24.885    0.000   24.885    0.000 /Users/tr3n1ttty/code projects/preps/cs 336/stanford-cs336-assignment1-basics/cs336_basics/pretokenization_example.py:121(<lambda>)
+#         1    0.000    0.000   20.406   20.406 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:738(__exit__)
+#         1    0.000    0.000   20.398   20.398 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:654(terminate)
+#        19    0.000    0.000   20.380    1.073 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/util.py:276(__call__)
+#         1    0.000    0.000   20.380   20.380 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:680(_terminate_pool)
+#         1    0.000    0.000   20.314   20.314 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:671(_help_stuff_finish)
+#         1    0.002    0.002   20.313   20.313 {method 'acquire' of '_multiprocessing.SemLock' objects}
+#       3/1    0.000    0.000   20.311   20.311 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/threading.py:1001(_bootstrap)
+#       3/1    0.000    0.000   20.311   20.311 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/threading.py:1028(_bootstrap_inner)
+#       3/1    0.000    0.000   20.311   20.311 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/threading.py:984(run)
+#         1    0.000    0.000   20.311   20.311 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:573(_handle_results)
+#         1    0.000    0.000   20.310   20.310 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:527(_handle_tasks)
+#         1    0.000    0.000   20.309   20.309 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:369(starmap)
+#         1    0.000    0.000   20.309   20.309 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:767(get)
+#        24    0.000    0.000    0.849    0.035 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:500(_wait_for_updates)
+#        51    0.000    0.000    0.837    0.016 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/connection.py:1160(wait)
+
+    path = "data/owt_train.txt"
+    vocab_size = 32_000
+    special_tokens = ["<|endoftext|>"]
+    output_path = "data/results/owt-train-bpe_tokenizer.pkl"
+    train_tokenizer(path, vocab_size, special_tokens, output_path)

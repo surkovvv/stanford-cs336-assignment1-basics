@@ -591,5 +591,4 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     vocab, merges = main(input_path, special_tokens, vocab_size)
-    dict_vocab = {i: vocab[i] for i in range(len(vocab))}
-    return dict_vocab, merges
+    return vocab, merges

@@ -73,7 +73,7 @@ def pretokenize_chunk(path: str, start: int, end: int, special_tokens: list[str]
 
 def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
     with open(path, "rb") as f:
-        num_processes = cpu_count()
+        num_processes = min(6, cpu_count())
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
     tasks = []
@@ -117,8 +117,8 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
 
     for mrg in range(num_merges):
         # print(f"merge #{mrg + 1}")
-        sorted_pairs = sorted(pair_counters, key=lambda x: (pair_counters[x], x))
-        new_merge_pair = sorted_pairs[-1]
+        # sorted_pairs = sorted(pair_counters, key=lambda x: (pair_counters[x], x))
+        new_merge_pair = max(pair_counters, key=lambda x: (pair_counters[x], x)) # sorted_pairs[-1]
         # print("2 most popular pairs:", sorted_pairs[-2:])
         new_merge_symbol = b''.join(new_merge_pair)
 
@@ -184,8 +184,16 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
                     if not curr_pair in pair_to_pretokens:
                         pair_to_pretokens[curr_pair] = set()
                     pair_to_pretokens[curr_pair].add(pretoken)
-            
-    return vocab, merges
+
+    dict_vocab = {i: vocab[i] for i in range(len(vocab))}
+
+    longest_token_id = max(vocab, key=lambda x: len(vocab[x]))
+    longest_token = vocab[longest_token_id]
+
+    print(longest_token)
+    print(len(longest_token))
+    
+    return dict_vocab, merges
 
 
 if __name__ == "__main__":

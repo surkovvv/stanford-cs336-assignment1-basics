@@ -86,3 +86,17 @@ def test_train_bpe_special_tokens(snapshot):
             "merges": merges,
         },
     )
+
+# def test_train_bpe_mine():
+#     """
+#     Mine test
+#     """
+#     input_path = FIXTURES_PATH / "test.txt"
+#     start_time = time.time()
+#     _, _ = run_train_bpe(
+#         input_path=input_path,
+#         vocab_size=265,
+#         special_tokens=["<|endoftext|>"],
+#     )
+#     end_time = time.time()
+#     assert end_time - start_time < 1.5

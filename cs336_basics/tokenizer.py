@@ -125,6 +125,7 @@ vocab = bpe_example(corpus)
 
 from pretokenization_example import main
 import pickle
+from typing import Iterable, Iterator
 
 
 def train_tokenizer(path, vocab_size, special_tokens, output_path):
@@ -137,6 +138,93 @@ def train_tokenizer(path, vocab_size, special_tokens, output_path):
             },
             f,
         )
+
+from pretokenization_example import PAT
+import regex as re
+
+
+def pretokenize(text: str) -> list[tuple[bytes]]:
+    pretokenize_result = []
+    for pretoken in re.finditer(PAT, text):
+        pretoken = pretoken.group(0)
+        encoded_pretoken = pretoken.encode('utf-8')
+        current_view = tuple(encoded_pretoken[i:i+1] for i in range(len(encoded_pretoken)))
+        pretokenize_result.append(current_view)
+
+    return pretokenize_result
+
+
+class Tokenizer:
+    def __init__(self, 
+        vocab: dict[int, bytes],
+        merges: list[tuple[bytes, bytes]],
+        special_tokens: list[str] | None = None
+    ):
+        self.vocab = vocab
+        self.reversed_vocab = {bytes_: idx for idx, bytes_ in vocab.items()}
+        self.merges = merges
+        self.special_tokens = special_tokens
+
+        for special_token in special_tokens:
+            encoded_special_token = special_token.encode("utf-8")
+            if encoded_special_token not in self.reversed_vocab:
+                new_idx = len(vocab)
+                self.reversed_vocab[encoded_special_token] = new_idx
+                self.vocab[new_idx] = encoded_special_token
+                print("New special token ", special_token, " added!")
+
+
+    def from_files(cls, vocab_filepath, merges_filepath, special_tokens = None):
+        pass
+
+    def encode_text_without_special_tokens(self, text: str) -> list[int]:
+        pretokenized_view = pretokenize(text)  # м.б. тут вернуть list[tuple[bytes]]?
+
+        encoded_text = []
+        for pretoken_view in pretokenized_view:
+            current_view = pretoken_view.copy()
+            for merge_pair in self.merges:
+                merged_pair_ids = []
+                for idx in range(len(current_view) - 1):
+                    pretoken_pair = current_view[idx: idx + 2]
+                    if pretoken_pair == merge_pair:
+                        merged_pair_ids.append(idx)
+
+                new_view = tuple()
+                last_used_idx = 0
+                for idx in merged_pair_ids:
+                    new_view += current_view[last_used_idx: idx] + (current_view[idx] + current_view[idx + 1],)
+                    last_used_idx = idx + 2
+                new_view += current_view[last_used_idx: len(current_view)]
+
+                current_view = new_view
+
+                if len(current_view) == 1:
+                    break
+
+            for token in current_view:
+                encoded_text.append(self.reversed_vocab[token])
+
+        return encoded_text
+
+
+    def encode(self, text: str) -> list[int]:
+        pattern = f"({"|".join(re.escape(t) for t in self.special_tokens)})"
+        encoded_result = []
+        for part in re.split(pattern, text):
+            if part in self.special_tokens:
+                encoded_result.append(self.reversed_vocab[part])
+            else:
+                encoded_result.extend(self.encode_text_without_special_tokens(part))
+
+        return encoded_result
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        pass
+
+    def decode(self, token_ids: list[int]) -> str:
+        pass
+
 
 if __name__ == "__main__":
     # path = "data/TinyStoriesV2-GPT4-train.txt" # "data/TinyStoriesV2-GPT4-train.txt"
@@ -180,8 +268,11 @@ if __name__ == "__main__":
 #        24    0.000    0.000    0.849    0.035 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/pool.py:500(_wait_for_updates)
 #        51    0.000    0.000    0.837    0.016 /Users/tr3n1ttty/.local/share/uv/python/cpython-3.13.15-macos-aarch64-none/lib/python3.13/multiprocessing/connection.py:1160(wait)
 
-    path = "data/owt_train.txt"
-    vocab_size = 32_000
-    special_tokens = ["<|endoftext|>"]
-    output_path = "data/results/owt-train-bpe_tokenizer.pkl"
-    train_tokenizer(path, vocab_size, special_tokens, output_path)
+    # path = "data/owt_train.txt"
+    # vocab_size = 32_000
+    # special_tokens = ["<|endoftext|>"]
+    # output_path = "data/results/owt-train-bpe_tokenizer.pkl"
+    # train_tokenizer(path, vocab_size, special_tokens, output_path)
+
+    # need to create custom from file to load trained vocab and merges.. srry I can't check it now=(
+    pass

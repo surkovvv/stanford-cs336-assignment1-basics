@@ -1,11 +1,29 @@
 import os
 import regex as re
+import psutil
+from tqdm import trange
 
 from typing import BinaryIO
 from multiprocessing import Pool, cpu_count
+from collections import Counter
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 NUM_DEFAULT_TOKENS = 256
+
+NUM_PROCESSES = 10
+NUM_CHUNKS = 20 * NUM_PROCESSES
+
+process = psutil.Process(os.getpid())
+
+
+def print_mem(label):
+    rss = process.memory_info().rss / 1024**3
+    print(f"{label}: {rss:.2f} GB")
+
+
+def pretokenize_chunk_wrapper(args):
+    return pretokenize_chunk(*args)
+
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -72,21 +90,37 @@ def pretokenize_chunk(path: str, start: int, end: int, special_tokens: list[str]
 
 
 def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
+    print_mem("start")
+    num_processes = min(NUM_PROCESSES, cpu_count())
+
     with open(path, "rb") as f:
-        num_processes = min(6, cpu_count())
-        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+        boundaries = find_chunk_boundaries(f, NUM_CHUNKS, b"<|endoftext|>")
 
     tasks = []
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         tasks.append((path, start, end, special_tokens))
-    with Pool(processes=num_processes) as pool:
-        results = pool.starmap(pretokenize_chunk, tasks)
 
-    pretokens_counter = {}
-    for d in results:
-        for key, value in d.items():
-            # Если ключа еще нет, .get(key, 0) вернет 0
-            pretokens_counter[key] = pretokens_counter.get(key, 0) + value
+    pretokens_counter = Counter()
+    total = len(tasks)
+
+    with Pool(processes=num_processes) as pool:
+        for i, local_counter in enumerate(
+            pool.imap_unordered(
+                pretokenize_chunk_wrapper,
+                tasks,
+                chunksize=1,
+            )
+        ):
+            pretokens_counter.update(local_counter)
+            print(f"{i}/{total} chunks done ({i / total:.1%})")
+
+    print_mem("after pretokenization")
+
+    # pretokens_counter = {}
+    # for d in results:
+    #     for key, value in d.items():
+    #         # Если ключа еще нет, .get(key, 0) вернет 0
+    #         pretokens_counter[key] = pretokens_counter.get(key, 0) + value
 
     # print("pretoken counts:", pretokens_counter)
     # print(special_tokens[0] in pretokens_counter)
@@ -110,12 +144,16 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
             pair_to_pretokens[pair].add(pretoken)
 
     # print("pair counts: ", pair_counters)
+    print_mem("after counters merged")
+
     num_merges = vocab_size - len(special_tokens) - NUM_DEFAULT_TOKENS
     all_bytes = bytes(range(NUM_DEFAULT_TOKENS))
     vocab = [all_bytes[i : i + 1] for i in range(NUM_DEFAULT_TOKENS)] + [st.encode("utf-8") for st in special_tokens]
     merges: list[tuple[bytes, bytes]] = []
 
-    for mrg in range(num_merges):
+    for mrg in trange(num_merges):
+        if mrg % 100 == 0:
+            print_mem(f"after merge {mrg}")
         # print(f"merge #{mrg + 1}")
         # sorted_pairs = sorted(pair_counters, key=lambda x: (pair_counters[x], x))
         new_merge_pair = max(pair_counters, key=lambda x: (pair_counters[x], x)) # sorted_pairs[-1]
@@ -187,11 +225,12 @@ def main(path: str, special_tokens=["<|endoftext|>"], vocab_size: int = 666):
 
     dict_vocab = {i: vocab[i] for i in range(len(vocab))}
 
-    longest_token_id = max(vocab, key=lambda x: len(vocab[x]))
-    longest_token = vocab[longest_token_id]
+    longest_token = max(vocab, key=len)
 
     print(longest_token)
     print(len(longest_token))
+    # b'\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82'
+    # 64
     
     return dict_vocab, merges
 

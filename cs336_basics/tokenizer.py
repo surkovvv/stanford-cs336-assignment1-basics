@@ -123,7 +123,9 @@ vocab = bpe_example(corpus)
 # print(test_tuple[:5] + ('am',) + test_tuple[5 + 2:])
 # print(vocab[-6:])
 
-from pretokenization_example import main
+from cs336_basics.pretokenization_example import main, PAT
+
+import regex as re
 import pickle
 from typing import Iterable, Iterator
 
@@ -139,8 +141,7 @@ def train_tokenizer(path, vocab_size, special_tokens, output_path):
             f,
         )
 
-from pretokenization_example import PAT
-import regex as re
+
 
 
 def pretokenize(text: str) -> list[tuple[bytes]]:
@@ -165,24 +166,33 @@ class Tokenizer:
         self.merges = merges
         self.special_tokens = special_tokens
 
-        for special_token in special_tokens:
-            encoded_special_token = special_token.encode("utf-8")
-            if encoded_special_token not in self.reversed_vocab:
-                new_idx = len(vocab)
-                self.reversed_vocab[encoded_special_token] = new_idx
-                self.vocab[new_idx] = encoded_special_token
-                print("New special token ", special_token, " added!")
+        if special_tokens is not None:
+            for special_token in special_tokens:
+                encoded_special_token = special_token.encode("utf-8")
+                if encoded_special_token not in self.reversed_vocab:
+                    new_idx = len(vocab)
+                    self.reversed_vocab[encoded_special_token] = new_idx
+                    self.vocab[new_idx] = encoded_special_token
+                    print("New special token ", special_token, " added!")
+        else:
+            self.special_tokens = []
 
-
+    @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens = None):
-        pass
+        with open(vocab_filepath, "rb") as f:
+            vocab = pickle.load(f)
+
+        with open(merges_filepath, "rb") as f:
+            merges = pickle.load(f)
+
+        return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
     def encode_text_without_special_tokens(self, text: str) -> list[int]:
-        pretokenized_view = pretokenize(text)  # м.б. тут вернуть list[tuple[bytes]]?
+        pretokenized_view = pretokenize(text)
 
         encoded_text = []
         for pretoken_view in pretokenized_view:
-            current_view = pretoken_view.copy()
+            current_view = pretoken_view  # .copy()
             for merge_pair in self.merges:
                 merged_pair_ids = []
                 for idx in range(len(current_view) - 1):
@@ -209,21 +219,31 @@ class Tokenizer:
 
 
     def encode(self, text: str) -> list[int]:
-        pattern = f"({"|".join(re.escape(t) for t in self.special_tokens)})"
         encoded_result = []
-        for part in re.split(pattern, text):
-            if part in self.special_tokens:
-                encoded_result.append(self.reversed_vocab[part])
-            else:
-                encoded_result.extend(self.encode_text_without_special_tokens(part))
+        if self.special_tokens:
+            len_sorted_special_tokens = self.special_tokens.sort(key=len, reverse=True)
+            pattern = f"({"|".join(re.escape(t) for t in len_sorted_special_tokens)})"
+            
+            for part in re.split(pattern, text):
+                if part in self.special_tokens:
+                    encoded_result.append(self.reversed_vocab[part.encode('utf-8')])
+                else:
+                    encoded_result.extend(self.encode_text_without_special_tokens(part))
+        else:
+            encoded_result = self.encode_text_without_special_tokens(text)
 
         return encoded_result
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        pass
+        for chunk in iterable:
+            chunk_ids = self.encode(chunk)
+            for chunk_id in chunk_ids:
+                yield chunk_id
 
     def decode(self, token_ids: list[int]) -> str:
-        pass
+        bytes_str = b''.join([self.vocab[token_id] for token_id in token_ids])
+        decoded_str = bytes_str.decode("utf-8", errors="replace")
+        return decoded_str
 
 
 if __name__ == "__main__":

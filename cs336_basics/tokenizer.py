@@ -112,7 +112,7 @@ corpus = [
     "newest newest newest newest newest newest"
 ]
 
-vocab = bpe_example(corpus)
+# vocab = bpe_example(corpus)
 # # print(b''.join((b's', b'et')))
 # test_tuple = ('h', 'e', 'r', 'e', 'i', 'a', 'm')  
 # # change e r -> er
@@ -140,8 +140,6 @@ def train_tokenizer(path, vocab_size, special_tokens, output_path):
             },
             f,
         )
-
-
 
 
 def pretokenize(text: str) -> list[tuple[bytes]]:
@@ -221,7 +219,7 @@ class Tokenizer:
     def encode(self, text: str) -> list[int]:
         encoded_result = []
         if self.special_tokens:
-            len_sorted_special_tokens = self.special_tokens.sort(key=len, reverse=True)
+            len_sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
             pattern = f"({"|".join(re.escape(t) for t in len_sorted_special_tokens)})"
             
             for part in re.split(pattern, text):

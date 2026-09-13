@@ -123,11 +123,13 @@ corpus = [
 # print(test_tuple[:5] + ('am',) + test_tuple[5 + 2:])
 # print(vocab[-6:])
 
-from cs336_basics.pretokenization_example import main, PAT
+from cs336_basics.pretokenization_example import main, PAT, find_chunk_boundaries
 
 import regex as re
 import pickle
 from typing import Iterable, Iterator
+from multiprocessing import Pool, cpu_count
+import numpy as np
 
 
 def train_tokenizer(path, vocab_size, special_tokens, output_path):
@@ -244,6 +246,63 @@ class Tokenizer:
         return decoded_str
 
 
+def encode_chunk(input_path, start: int, end: int, tokenizer: Tokenizer):
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8", errors="ignore")
+
+    encoded_chunk = tokenizer.encode(chunk)
+    return encoded_chunk
+
+
+def encoder_chunk_wrapper(args):
+    return encode_chunk(*args)
+
+
+def encode_data(input_path, vocab_path, merges_path, output_path = None, special_tokens = ["<|endoftext|>"]):
+    tokenizer = Tokenizer.from_files(vocab_path, merges_path, special_tokens)
+    num_processes = min(cpu_count(), 10)  # magic number = 12(cpu count on my mac) - 2
+    NUM_CHUNKS = 5 * num_processes  # 5 x from processes
+
+    with open(input_path, "rb") as f:
+        boundaries = find_chunk_boundaries(f, NUM_CHUNKS, b"<|endoftext|>")
+
+    tasks = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        tasks.append((input_path, start, end, tokenizer))
+
+    encoded_text = []
+    total = len(tasks)
+
+    with Pool(processes=num_processes) as pool:
+            for i, local_counter in enumerate(
+                pool.imap(
+                    encoder_chunk_wrapper,
+                    tasks,
+                    chunksize=1,
+                )
+            ):
+                encoded_text.extend(local_counter)
+                print(f"{i}/{total} chunks done ({i / total:.1%})")
+
+    if output_path is not None:
+        np_encoded_text = np.asarray(encoded_text, dtype=np.uint16)
+        np.save(output_path, np_encoded_text)
+
+    return encoded_text
+
+
+def check_encoding_procedure(input_path, vocab_path, merges_path, special_tokens = ["<|endoftext|>"]):
+    with open(input_path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    
+    encoded_text = encode_data(input_path, vocab_path, merges_path)
+    decoded_text = Tokenizer.from_files(vocab_path, merges_path, special_tokens).decode(encoded_text)
+
+    assert text == decoded_text
+    print("All good!")
+    
+
 if __name__ == "__main__":
     # path = "data/TinyStoriesV2-GPT4-train.txt" # "data/TinyStoriesV2-GPT4-train.txt"
     # vocab_size = 10_000
@@ -293,4 +352,22 @@ if __name__ == "__main__":
     # train_tokenizer(path, vocab_size, special_tokens, output_path)
 
     # need to create custom from file to load trained vocab and merges.. srry I can't check it now=(
-    pass
+    
+    ts_path = "data/TinyStoriesV2-GPT4-train.txt"
+    ts_vobab_path = "data/results/owt-train-bpe_tokenizer-vocab.pkl"
+    ts_merges_path = "data/results/owt-train-bpe_tokenizer-merges.pkl"
+    special_tokens = ["<|endoftext|>"]
+    ts_tokenizer = Tokenizer.from_files(ts_vobab_path, ts_merges_path, special_tokens)
+
+    # data_to_test_path = "data/ts-test-data.txt"
+    # check_encoding_procedure(data_to_test_path, ts_vobab_path, ts_merges_path)  >> ALL good!
+
+    ts_valid_path = "data/TinyStoriesV2-GPT4-valid.txt"
+    ts_output_valid_path = "data/TinyStoriesV2-GPT4-valid-encoded.npy"
+
+    # encode_data(ts_valid_path, ts_vobab_path, ts_merges_path, ts_output_valid_path)
+
+    ts_train_path = "data/TinyStoriesV2-GPT4-train.txt"
+    ts_output_train_path = "data/TinyStoriesV2-GPT4-train-encoded.npy"
+
+    encode_data(ts_train_path, ts_vobab_path, ts_merges_path, ts_output_train_path)

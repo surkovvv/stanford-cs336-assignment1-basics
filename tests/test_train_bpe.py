@@ -57,7 +57,7 @@ def test_train_bpe():
             for gpt2_vocab_item, gpt2_vocab_index in gpt2_reference_vocab.items()
         }
     # Rather than checking that the vocabs exactly match (since they could
-    # have been constructed differently, we'll make sure that the vocab keys and values match)
+    # have been constructed differently), we'll make sure that the vocab keys and values match
     assert set(vocab.keys()) == set(reference_vocab.keys())
     assert set(vocab.values()) == set(reference_vocab.values())
 
@@ -86,3 +86,17 @@ def test_train_bpe_special_tokens(snapshot):
             "merges": merges,
         },
     )
+
+# def test_train_bpe_mine():
+#     """
+#     Mine test
+#     """
+#     input_path = FIXTURES_PATH / "test.txt"
+#     start_time = time.time()
+#     _, _ = run_train_bpe(
+#         input_path=input_path,
+#         vocab_size=265,
+#         special_tokens=["<|endoftext|>"],
+#     )
+#     end_time = time.time()
+#     assert end_time - start_time < 1.5

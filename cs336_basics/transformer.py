@@ -96,3 +96,41 @@ class SwiGLUFFN(nn.Module):
         result = einsum(self.W_outer, inside, 'd_model d_ff, ... d_ff -> ... d_model')
         return result
 
+
+class RotaryPositionalEmbedding(nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device | None = None):
+        super().__init__()
+
+        i = torch.arange(end=max_seq_len, device=device).view(max_seq_len, 1)
+        ks = torch.arange(start=1, end=d_k//2 + 1)
+        denominator = torch.pow(theta, (2 * ks - 2) / d_k).view(1, d_k // 2)
+        thetas =  i / denominator
+
+        sins = torch.sin(thetas)
+        coss = torch.cos(thetas)
+
+        self.register_buffer("sin_cached", sins, persistent=False)
+        self.register_buffer("cos_cached", coss, persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        x_even = x[..., ::2]
+        x_odd = x[..., 1::2]
+
+        selected_sin = self.sin_cached[token_positions, :]
+        selected_cos = self.cos_cached[token_positions, :]
+
+        x_even_rotated = x_even * selected_cos - x_odd * selected_sin
+        x_odd_rotated = x_even * selected_sin + x_odd * selected_cos
+
+        x_rotated = torch.empty_like(x)
+        x_rotated[..., ::2] = x_even_rotated
+        x_rotated[..., 1::2] = x_odd_rotated
+
+        return x_rotated
+
+
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    max_elem_among_dim = x.max(dim=dim, keepdim=True).values
+    extracted_exp = torch.exp(x - max_elem_among_dim)
+    result = extracted_exp / torch.sum(extracted_exp, dim=dim, keepdim=True)
+    return result

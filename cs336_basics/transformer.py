@@ -134,3 +134,91 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     extracted_exp = torch.exp(x - max_elem_among_dim)
     result = extracted_exp / torch.sum(extracted_exp, dim=dim, keepdim=True)
     return result
+
+
+def sdpa(
+    queries: torch.Tensor, 
+    keys: torch.Tensor, 
+    values: torch.Tensor, 
+    mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+    d_k = keys.shape[-1]
+    presoftmax_numerator = einsum(queries, keys, "... q_seq_len d_k, ... k_seq_len d_k -> ... q_seq_len k_seq_len")
+    presoftmax = presoftmax_numerator / math.sqrt(d_k)
+
+    if mask is not None:
+        presoftmax = torch.masked_fill(presoftmax, ~mask, -torch.inf)  # [~mask] += -torch.inf
+
+    softmaxed = softmax(presoftmax, dim=-1)
+    result = einsum(softmaxed, values, "... q_seq_len k_seq_len, ... k_seq_len d_v -> ... q_seq_len d_v")
+    return result
+
+
+def create_and_init(
+    in_features: int, 
+    out_features: int, 
+    device: torch.device | None  = None, 
+    dtype: torch.dtype | None = None
+    ) -> nn.Parameter:
+    weights = torch.empty((out_features, in_features), dtype=dtype, device=device)
+    std = math.sqrt(2 / (in_features + out_features))
+    init_weights = nn.init.trunc_normal_(weights, std=std, a=-3 * std, b=3 * std)
+    params = nn.Parameter(init_weights)
+    return params
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, 
+        d_model: int, 
+        num_heads: int,
+        max_seq_len: int | None = None,
+        theta: float | None = None,
+        device: torch.device | None  = None, 
+        dtype: torch.dtype | None = None
+        ):
+        super().__init__()
+
+        d_k = d_v = d_model // num_heads
+        self.num_heads = num_heads
+
+        self.W_q = create_and_init(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
+        self.W_k = create_and_init(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
+        self.W_v = create_and_init(in_features=d_model, out_features=num_heads*d_v, dtype=dtype, device=device)
+        self.W_o = create_and_init(in_features=num_heads*d_v, out_features=d_model, dtype=dtype, device=device)
+
+        self.use_rope = False
+
+        if max_seq_len is not None and theta is not None:
+            self.use_rope = True
+            self.max_seq_len = max_seq_len
+            self.rope = RotaryPositionalEmbedding(
+                theta=theta, 
+                d_k=d_k,
+                max_seq_len=max_seq_len,
+                device=device
+            )
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        seq_len = x.shape[1]
+        queries = einsum(x, self.W_q, "... d_model, hd d_model -> ... hd")
+        keys = einsum(x, self.W_k, "... d_model, hd d_model -> ... hd")
+        values = einsum(x, self.W_v, "... d_model, hd d_model -> ... hd")
+
+        queries_slised = rearrange(queries, "b s (h d) -> b h s d", h=self.num_heads)
+        keys_slised = rearrange(keys, "b s (h d) -> b h s d", h=self.num_heads)
+        values_slised = rearrange(values, "b s (h d) -> b h s d", h=self.num_heads)
+
+        mask = torch.ones(seq_len, seq_len, dtype=torch.bool).tril()
+
+        if self.use_rope:
+            if token_positions is None:
+                token_positions = torch.arange(self.max_seq_len)
+
+            queries_slised = self.rope(queries_slised, token_positions)
+            keys_slised = self.rope(keys_slised, token_positions)
+
+        sdpa_result = sdpa(queries_slised, keys_slised, values_slised, mask=mask)
+        sdpa_result_unslised = rearrange(sdpa_result, "b h s d -> b s (h d)", h=self.num_heads)
+
+        output = einsum(self.W_o, sdpa_result_unslised, "d_model hd, ... hd -> ... d_model")
+        return output

@@ -212,7 +212,7 @@ class MultiHeadSelfAttention(nn.Module):
 
         if self.use_rope:
             if token_positions is None:
-                token_positions = torch.arange(self.max_seq_len)
+                token_positions = torch.arange(seq_len)
 
             queries_slised = self.rope(queries_slised, token_positions)
             keys_slised = self.rope(keys_slised, token_positions)
@@ -222,3 +222,75 @@ class MultiHeadSelfAttention(nn.Module):
 
         output = einsum(self.W_o, sdpa_result_unslised, "d_model hd, ... hd -> ... d_model")
         return output
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, 
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int,
+        max_seq_len: int,
+        theta: float,
+        device: torch.device | None  = None, 
+        dtype: torch.dtype | None = None
+        ):
+        super().__init__()
+
+        self.mhsa = MultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, device, dtype)
+        self.ffn = SwiGLUFFN(d_model, d_ff, device, dtype)
+        self.attention_prenorm = RMSNorm(d_model)
+        self.ffn_prenorm = RMSNorm(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = x + self.mhsa(self.attention_prenorm(x))
+        z = y + self.ffn(self.ffn_prenorm(y))
+        return z
+
+
+class TransformerLM(nn.Module):
+    def __init__(self, 
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int,
+        theta: float,
+        vocab_size: int, 
+        context_length: int,
+        num_layers: int,
+        device: torch.device | None  = None, 
+        dtype: torch.dtype | None = None
+    ):
+        super().__init__()
+
+        self.embedding = Embedding(
+            num_embeddings=vocab_size,
+            embeddings_dim=d_model,
+            device=device,
+            dtype=dtype
+        )
+
+        self.layers = nn.ModuleList([
+            TransformerBlock(
+                d_model, 
+                num_heads, 
+                d_ff,
+                context_length,
+                theta,
+                device,
+                dtype
+            )
+            for _ in range(num_layers)
+        ])
+
+        self.last_norm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device, dtype)
+
+    def forward(self, in_indices: torch.Tensor) -> torch.Tensor:
+        embs = self.embedding(in_indices)
+
+        layer_output = embs
+        for layer in self.layers:
+            layer_output = layer(layer_output)
+
+        normalized_layers_output = self.last_norm(layer_output)
+        vocab_dist = self.lm_head(normalized_layers_output)
+        return vocab_dist

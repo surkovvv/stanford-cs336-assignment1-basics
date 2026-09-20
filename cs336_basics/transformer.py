@@ -4,6 +4,19 @@ import math
 from einops import einsum, reduce, rearrange
 
 
+def create_and_init_weights(
+    in_features: int, 
+    out_features: int, 
+    device: torch.device | None  = None, 
+    dtype: torch.dtype | None = None
+    ) -> nn.Parameter:
+    weights = torch.empty((out_features, in_features), dtype=dtype, device=device)
+    std = math.sqrt(2 / (in_features + out_features))
+    init_weights = nn.init.trunc_normal_(weights, std=std, a=-3 * std, b=3 * std)
+    params = nn.Parameter(init_weights)
+    return params
+
+
 class Linear(nn.Module):
     def __init__(self, 
         in_features: int,
@@ -12,10 +25,7 @@ class Linear(nn.Module):
         dtype: torch.dtype | None = None
     ):
         super().__init__()
-        weights = torch.empty((out_features, in_features), dtype=dtype, device=device)
-        std = math.sqrt(2 / (in_features + out_features))
-        init_weights = nn.init.trunc_normal_(weights, std=std, a=-3 * std, b=3 * std)
-        self.W = nn.Parameter(init_weights)
+        self.W = create_and_init_weights(in_features, out_features, device, dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         result = einsum(self.W, x, '... d_out d_in, ... d_in -> ... d_out')
@@ -41,7 +51,7 @@ class Embedding(nn.Module):
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         assert token_ids.dtype == torch.long
-        result_embeddings = self.embeddings.data[token_ids]
+        result_embeddings = self.embeddings[token_ids]
         return result_embeddings
 
 
@@ -80,9 +90,9 @@ class SwiGLUFFN(nn.Module):
         if d_ff is None:
             d_ff = 8 * (d_model // 3)
         
-        self.W_silu = nn.Parameter(torch.empty((d_ff, d_model), dtype=dtype, device=device))
-        self.W_inner = nn.Parameter(torch.empty((d_ff, d_model), dtype=dtype, device=device))
-        self.W_outer = nn.Parameter(torch.empty((d_model, d_ff), dtype=dtype, device=device))
+        self.W_silu = create_and_init_weights(d_model, d_ff, dtype=dtype, device=device)
+        self.W_inner = create_and_init_weights(d_model, d_ff, dtype=dtype, device=device)
+        self.W_outer = create_and_init_weights(d_ff, d_model, dtype=dtype, device=device)
 
     def silu(self, x: torch.Tensor) -> torch.Tensor:
         result = x * torch.sigmoid(x)
@@ -101,8 +111,9 @@ class RotaryPositionalEmbedding(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device | None = None):
         super().__init__()
 
+        assert d_k % 2 == 0
         i = torch.arange(end=max_seq_len, device=device).view(max_seq_len, 1)
-        ks = torch.arange(start=1, end=d_k//2 + 1)
+        ks = torch.arange(start=1, end=d_k//2 + 1, device=device)
         denominator = torch.pow(theta, (2 * ks - 2) / d_k).view(1, d_k // 2)
         thetas =  i / denominator
 
@@ -113,6 +124,8 @@ class RotaryPositionalEmbedding(nn.Module):
         self.register_buffer("cos_cached", coss, persistent=False)
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        assert x.shape[-2] == token_positions.shape[-1]
+        assert (token_positions.min() >= 0) and (token_positions.max() < self.sin_cached.shape[0])
         x_even = x[..., ::2]
         x_odd = x[..., 1::2]
 
@@ -147,24 +160,12 @@ def sdpa(
     presoftmax = presoftmax_numerator / math.sqrt(d_k)
 
     if mask is not None:
-        presoftmax = torch.masked_fill(presoftmax, ~mask, -torch.inf)  # [~mask] += -torch.inf
+        mask = mask.to(presoftmax.device)
+        presoftmax = torch.masked_fill(presoftmax, ~mask, -torch.inf)
 
     softmaxed = softmax(presoftmax, dim=-1)
     result = einsum(softmaxed, values, "... q_seq_len k_seq_len, ... k_seq_len d_v -> ... q_seq_len d_v")
     return result
-
-
-def create_and_init(
-    in_features: int, 
-    out_features: int, 
-    device: torch.device | None  = None, 
-    dtype: torch.dtype | None = None
-    ) -> nn.Parameter:
-    weights = torch.empty((out_features, in_features), dtype=dtype, device=device)
-    std = math.sqrt(2 / (in_features + out_features))
-    init_weights = nn.init.trunc_normal_(weights, std=std, a=-3 * std, b=3 * std)
-    params = nn.Parameter(init_weights)
-    return params
 
 
 class MultiHeadSelfAttention(nn.Module):
@@ -178,15 +179,22 @@ class MultiHeadSelfAttention(nn.Module):
         ):
         super().__init__()
 
+        assert d_model % num_heads == 0
+
         d_k = d_v = d_model // num_heads
+
         self.num_heads = num_heads
 
-        self.W_q = create_and_init(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
-        self.W_k = create_and_init(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
-        self.W_v = create_and_init(in_features=d_model, out_features=num_heads*d_v, dtype=dtype, device=device)
-        self.W_o = create_and_init(in_features=num_heads*d_v, out_features=d_model, dtype=dtype, device=device)
+        self.W_q = create_and_init_weights(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
+        self.W_k = create_and_init_weights(in_features=d_model, out_features=num_heads*d_k, dtype=dtype, device=device)
+        self.W_v = create_and_init_weights(in_features=d_model, out_features=num_heads*d_v, dtype=dtype, device=device)
+        self.W_o = create_and_init_weights(in_features=num_heads*d_v, out_features=d_model, dtype=dtype, device=device)
 
         self.use_rope = False
+
+        condition1 = theta is not None and max_seq_len is not None
+        condition2 = theta is None and max_seq_len is None
+        assert condition1 or condition2
 
         if max_seq_len is not None and theta is not None:
             self.use_rope = True
@@ -208,7 +216,7 @@ class MultiHeadSelfAttention(nn.Module):
         keys_slised = rearrange(keys, "b s (h d) -> b h s d", h=self.num_heads)
         values_slised = rearrange(values, "b s (h d) -> b h s d", h=self.num_heads)
 
-        mask = torch.ones(seq_len, seq_len, dtype=torch.bool).tril()
+        mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).tril()
 
         if self.use_rope:
             if token_positions is None:
@@ -238,8 +246,8 @@ class TransformerBlock(nn.Module):
 
         self.mhsa = MultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, device, dtype)
         self.ffn = SwiGLUFFN(d_model, d_ff, device, dtype)
-        self.attention_prenorm = RMSNorm(d_model)
-        self.ffn_prenorm = RMSNorm(d_model)
+        self.attention_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x + self.mhsa(self.attention_prenorm(x))
@@ -292,5 +300,5 @@ class TransformerLM(nn.Module):
             layer_output = layer(layer_output)
 
         normalized_layers_output = self.last_norm(layer_output)
-        vocab_dist = self.lm_head(normalized_layers_output)
-        return vocab_dist
+        vocab_logits = self.lm_head(normalized_layers_output)
+        return vocab_logits

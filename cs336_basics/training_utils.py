@@ -229,3 +229,28 @@ print("a = ", 4 * a, " bytes")
 print("b = ", 4 * b, " bytes")
 max_batch_size = (space_total // 4 - b) // a
 print("max batch size for gpt XL:", max_batch_size)  # >> 3
+
+# How many FLOPs does running one step of AdamW take?
+"""
+p.data -= lr * weight_decay * p.data -> [suppose p just fp32 number] -> 2 ops
+m = beta1 * m + (1 - beta1) * grad -> 1 + 1 + 1 -> 3 ops
+v = beta2 * v + (1 - beta2) * grad ** 2 -> 1 + 2 + 1 -> 4 ops
+p.data -= adjusted_lr * m / (torch.sqrt(v) + eps) -> 1 + 1 + 1 + 1 + 1 -> 5 ops
+Total: 14 ops per param
+as we calculated the total number of params via calc_total_number_of_params()..
+we can say, that each step is just 14 * calc_total_number_of_params() FLOPs = 22966339200 FLOPs
+"""
+
+print(14 * calc_total_number_of_params(gpt2_xl_config))
+
+adamw_flops = 14 * calc_total_number_of_params(gpt2_xl_config)
+forward_flops = 3_516_769_894_400  # Loot at resource accounting code
+backward_flops = 2 * forward_flops
+
+flop_per_second = 0.5 * 495 * 10 ** 12 # 495 - from H100 nvidia specs
+steps = 400 * 1000
+
+total_FLOPs = steps * (1024 * forward_flops + 1024 * backward_flops + adamw_flops)
+time_in_seconds = total_FLOPs / flop_per_second
+print(f"Time: {time_in_seconds}s ~= {time_in_seconds // 3600}h ~= {time_in_seconds // 3600 // 24} days")
+# >> Time: 17460266.799088486s ~= 4850.0h ~= 202.0 days

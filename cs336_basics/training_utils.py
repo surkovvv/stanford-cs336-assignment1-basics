@@ -254,3 +254,35 @@ total_FLOPs = steps * (1024 * forward_flops + 1024 * backward_flops + adamw_flop
 time_in_seconds = total_FLOPs / flop_per_second
 print(f"Time: {time_in_seconds}s ~= {time_in_seconds // 3600}h ~= {time_in_seconds // 3600 // 24} days")
 # >> Time: 17460266.799088486s ~= 4850.0h ~= 202.0 days
+
+
+def cosine_lr_schedulling(t: int, lr_min: float, lr_max: float, T_w: int, T_c: int) -> float:
+    if t < T_w:
+        current_lr = t / T_w * lr_max
+    elif T_w <= t < T_c:
+        current_lr = lr_min + 0.5 * (1 + math.cos((t - T_w) / (T_c - T_w) * math.pi)) * (lr_max - lr_min)
+    else:
+        current_lr = lr_min
+
+    return current_lr
+
+
+def gradient_clipping(list_of_params: list[torch.nn.Parameter], max_grad_norm: float) -> None:
+    eps = 1e-6
+    grad_norms = []
+    for param in list_of_params:
+        if param.grad is None:
+            continue
+
+        param_grad_l2_norm = torch.norm(param.grad, p=2)
+        grad_norms.append(param_grad_l2_norm)
+
+    total_grad_norm = (torch.tensor(grad_norms) ** 2).sum().sqrt()
+
+    if total_grad_norm > max_grad_norm:
+        for param in list_of_params:
+            if param.grad is None:
+                continue
+
+            param.grad *= max_grad_norm / (total_grad_norm + eps)
+    

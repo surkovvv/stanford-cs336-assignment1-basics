@@ -1,0 +1,9 @@
+defaults:
+  - model: base
+  - optimizer: base
+  - lr_scheduler: base
+  - data: base
+  - logging: base
+  - training_params: base
+  - run_params: base
+  - _self_

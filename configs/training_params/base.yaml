@@ -1,0 +1,6 @@
+defaults:
+  - _self_
+
+batch_size: 2
+seed: 666
+num_epochs: 5

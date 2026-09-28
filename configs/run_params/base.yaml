@@ -6,4 +6,4 @@ device: mps
 dtype: float32
 log_every: 10
 validate_every: 100
-save_every: 100
+save_every: 1000

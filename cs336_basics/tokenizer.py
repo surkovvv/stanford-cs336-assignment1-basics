@@ -365,9 +365,9 @@ if __name__ == "__main__":
     ts_valid_path = "data/TinyStoriesV2-GPT4-valid.txt"
     ts_output_valid_path = "data/TinyStoriesV2-GPT4-valid-encoded.npy"
 
-    # encode_data(ts_valid_path, ts_vobab_path, ts_merges_path, ts_output_valid_path)
+    encode_data(ts_valid_path, ts_vobab_path, ts_merges_path, ts_output_valid_path)
 
     ts_train_path = "data/TinyStoriesV2-GPT4-train.txt"
     ts_output_train_path = "data/TinyStoriesV2-GPT4-train-encoded.npy"
 
-    encode_data(ts_train_path, ts_vobab_path, ts_merges_path, ts_output_train_path)
+    # encode_data(ts_train_path, ts_vobab_path, ts_merges_path, ts_output_train_path)

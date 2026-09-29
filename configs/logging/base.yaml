@@ -2,3 +2,5 @@ defaults:
   - _self_
 
 use_console: True
+use_wandb: True
+project: cs336-hw1

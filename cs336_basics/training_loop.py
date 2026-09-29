@@ -13,7 +13,8 @@ from cs336_basics.training_utils import AdamW, cross_entropy, gradient_clipping
 from cs336_basics.tokenizer import Tokenizer
 from pathlib import Path
 from hydra.core.hydra_config import HydraConfig
-
+import weave
+import wandb
 
 def data_loading(
     x: np.ndarray, 
@@ -44,12 +45,15 @@ def save_checkpoint(
     model: nn.Module, 
     optimizer: torch.optim.Optimizer, 
     iteration: int, 
-    out: str | os.PathLike | BinaryIO | IO[bytes]
+    out: str | os.PathLike | BinaryIO | IO[bytes],
+    rng: np.random.Generator | None = None
 ) -> None:
     dict_to_save = {}
     dict_to_save["model_params"] = model.state_dict()
     dict_to_save["optimizer_params"] = optimizer.state_dict()
     dict_to_save["iteration"] = iteration
+    if rng is not None:
+        dict_to_save["rng_state"] = rng.bit_generator.state
 
     torch.save(dict_to_save, out)
 
@@ -57,12 +61,16 @@ def save_checkpoint(
 def load_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes], 
     model: nn.Module, 
-    optimizer: torch.optim.Optimizer
+    optimizer: torch.optim.Optimizer,
+    rng: np.random.Generator | None = None
 ) -> int:
     state_dict = torch.load(src)
     model.load_state_dict(state_dict["model_params"])
     optimizer.load_state_dict(state_dict["optimizer_params"])
     iteration = state_dict["iteration"]
+
+    if rng is not None and "rng_state" in state_dict:
+        rng.bit_generator.state = state_dict["rng_state"]
 
     return iteration
 
@@ -166,11 +174,12 @@ def calc_val_loss(
     context_length: int,
     batch_size: int,
     device: str | torch.device,
-    rng: np.random.Generator | None = None,
+    seed: int = 666,
     num_steps: int = 25
     ) -> float:
-    val_np_array = np.memmap(val_path, dtype=np.uint16)
+    val_np_array = np.load(val_path, mmap_mode="r")
     losses = []
+    rng = np.random.default_rng(seed=seed)
 
     for step in range(num_steps):
         input_batch, target_batch = data_loading(
@@ -207,7 +216,9 @@ def top_p_sampling(dist: torch.Tensor, top_p: float) -> int:
             break
     # print("subset_of_idx", subset_of_idx)
 
-    dist[subset_of_idx] = 0
+    keep = torch.zeros_like(dist, dtype=torch.bool)
+    keep[subset_of_idx] = True
+    dist[~keep] = 0
     dist /= cummulative_prob
 
     token_id = torch.multinomial(dist, num_samples=1).item()
@@ -246,12 +257,12 @@ def decode(
     return current_input
 
 
-# @hydra.main(version_base=None, config_path="../configs", config_name="config")
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg):
     print(cfg)
-
     # print(cfg.data.train_path)
-    train_np_array = np.memmap(cfg.data.train_path, dtype=np.uint16)  # same as we saved
+    train_np_array = np.load(cfg.data.train_path, mmap_mode="r")  # same as we saved
+    run = wandb.init(project=cfg.logging.project) if cfg.logging.use_wandb else None
     # print(len(train_np_array))  # >> 555917109
     # print(max(train_np_array))  # >> 31999
 
@@ -271,6 +282,7 @@ def main(cfg):
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     model = TransformerLM(**cfg.model, device=device)  # dtype=dtype,
+    run.watch(model, log="all", log_freq=cfg.run_params.validate_every)
     optimizer = AdamW(model.parameters(), **cfg.optimizer)
     rng = np.random.default_rng(seed=cfg.training_params.seed)
     # lr_scheduler = cosine_lr_schedulling()
@@ -289,11 +301,14 @@ def main(cfg):
         optimizer.zero_grad()
         loss = cross_entropy(logits, target_batch)
         loss.backward()
+
         gradient_clipping(model.parameters(), max_grad_norm=cfg.training_params.max_grad_norm)
         optimizer.step()
 
         if step % cfg.run_params.log_every == 0:
-            print(f"Step {step + 1} loss=", loss.detach().data)
+            print(f"Step {step + 1} loss=", loss.item())
+            if run is not None:
+                run.log({"train/loss": loss.item(), "step": step + 1})
         if step % cfg.run_params.validate_every == 0:
             num_steps = 30
             mean_val_loss = calc_val_loss(
@@ -302,16 +317,21 @@ def main(cfg):
                 context_length=cfg.model.context_length, 
                 batch_size=cfg.training_params.batch_size, 
                 device=device,
-                rng=rng,
+                seed=cfg.training_params.seed,
                 num_steps=num_steps
             )
-            print(f"Step: {step + 1} val loss over {num_steps} steps: ", mean_val_loss)
+            print(f"Step: {step + 1} val loss over {num_steps} steps: ", mean_val_loss.item())
+            if run is not None:
+                run.log({"val/loss": mean_val_loss.item(), "step": step + 1})
 
         if step % cfg.run_params.save_every == 0:
             # Например: outputs/checkpoints/2026-09-28_09-46-51/step_1000.pt
             checkpoint_path = checkpoint_dir / f"step_{step}.pt"
             save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path)
             print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
+
+    if run is not None:
+        run.finish()
     
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -341,17 +361,21 @@ def run_generate(cfg):
         idx for idx, token in tokenizer_vocab.items()
         if token == b"<|endoftext|>"
     )
-    print("Stop token id: ", stop_token_id)
+    # print("Stop token id: ", stop_token_id)
 
     token_ids = tokenizer.encode("Hello! My name is Nikita and ")
     input_prompt = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
 
     all_text = decode(model, input_prompt, stop_token_id, 30, 0.6, 0.9, context_length=cfg.model.context_length)
-    print("all text: ", all_text)
+    # print("all text: ", all_text)
     token_ids_all_text = [token_id.item() for token_id in all_text.squeeze()]
     print("generated text: ", tokenizer.decode(token_ids_all_text))
 
 
 if __name__ == "__main__":
-    # main()
-    run_generate()
+    main()
+    # run_generate()
+    # test_dist = torch.tensor([0.6, 0.3, 0.1])
+    # for _ in range(100):
+    #     res = top_p_sampling(test_dist, top_p=0.8)
+    #     print(res)

@@ -325,11 +325,15 @@ def main(cfg):
                 run.log({"val/loss": mean_val_loss.item(), "step": step + 1})
 
         if step % cfg.run_params.save_every == 0:
-            # Например: outputs/checkpoints/2026-09-28_09-46-51/step_1000.pt
+            # example: outputs/checkpoints/2026-09-28_09-46-51/step_1000.pt
             checkpoint_path = checkpoint_dir / f"step_{step}.pt"
             save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path)
             print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
 
+    checkpoint_path = checkpoint_dir / f"step_{step}.pt"
+    save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path)
+    print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
+    
     if run is not None:
         run.finish()
     

@@ -9,12 +9,15 @@ from hydra.core.config_store import ConfigStore
 from tqdm import trange
 
 from cs336_basics.transformer import TransformerLM, softmax
-from cs336_basics.training_utils import AdamW, cross_entropy, gradient_clipping
+from cs336_basics.training_utils import AdamW, cross_entropy, gradient_clipping, cosine_lr_schedulling
 from cs336_basics.tokenizer import Tokenizer
 from pathlib import Path
 from hydra.core.hydra_config import HydraConfig
 import weave
 import wandb
+
+DTYPES_MAPPING = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
+
 
 def data_loading(
     x: np.ndarray, 
@@ -121,16 +124,15 @@ class OptimizerParams:
 class LRSchedulerParams:
     lr_min: float
     lr_max: float
-    T_warmup: int
-    T: int
+    T_w: int
+    T_c: int
 
 @dataclass
 class TrainingParams:
     batch_size: int
     seed: int
-    num_epochs: int
-    optimizer_params: OptimizerParams
-    lr_scheduler_params: LRSchedulerParams
+    num_steps: int
+    max_grad_norm: float
 
 @dataclass
 class DataParams:
@@ -149,23 +151,23 @@ class RunParams:
 
 @dataclass
 class LoggingParams:
-    use_console: bool = True
+    use_console: bool = False
     # w&b params
+    use_wandb: bool = True
+    project: str | None = None
 
+@dataclass
+class Config:
+    model: ModelParams
+    optimizer: OptimizerParams
+    lr_scheduler: LRSchedulerParams
+    training_params: TrainingParams
+    data: DataParams
+    run_params: RunParams
+    logging: LoggingParams
 
-# cs = ConfigStore.instance()
-# cs.store(name="model", node=ModelParams)
-# cs.store(name="optimizer", node=OptimizerParams)
-# cs.store(group="db", name="base_mysql", node=MySQLConfig)
-# cs.store(group="db", name="base_postgresql", node=PostGreSQLConfig)
-
-
-def train_step():
-    pass
-
-
-def train():
-    pass
+cs = ConfigStore.instance()
+cs.store(name="base_config", node=Config)
 
 @torch.inference_mode(True)
 def calc_val_loss(
@@ -181,7 +183,7 @@ def calc_val_loss(
     losses = []
     rng = np.random.default_rng(seed=seed)
 
-    for step in range(num_steps):
+    for _ in range(num_steps):
         input_batch, target_batch = data_loading(
             val_np_array,
             batch_size=batch_size,
@@ -190,31 +192,24 @@ def calc_val_loss(
             rng=rng,
         )
 
-        with torch.no_grad():
-            logits = model(input_batch)
-            loss = cross_entropy(logits, target_batch)
-            losses.append(loss)
+        logits = model(input_batch)
+        loss = cross_entropy(logits, target_batch)
+        losses.append(loss)
 
     mean_loss_over_batches = sum(losses) / len(losses)
     return mean_loss_over_batches
 
 
-def parse_args():
-    pass
-
-
 def top_p_sampling(dist: torch.Tensor, top_p: float) -> int:
-    # print(dist.shape)
     values, indices = torch.sort(dist, descending=True)
     cummulative_prob = 0
     subset_of_idx = []
     for val, idx in zip(values, indices):
         cummulative_prob += val
         subset_of_idx.append(idx.item())
-        # print("cum prob:", cummulative_prob)
+
         if cummulative_prob > top_p:
             break
-    # print("subset_of_idx", subset_of_idx)
 
     keep = torch.zeros_like(dist, dtype=torch.bool)
     keep[subset_of_idx] = True
@@ -244,10 +239,7 @@ def decode(
     while new_tokens_left > 0:
         logits = model(current_input)
         temperatured_dist = softmax(logits, dim=-1, temp=temperature)
-        # print("temperatured_dist shape", temperatured_dist.shape)
         new_generated_token = top_p_sampling(temperatured_dist[..., -1, :].squeeze(), top_p)
-        # print("new generated token: ", new_generated_token)
-        # print("current_input", current_input)
         current_input = torch.cat((current_input, current_input.new_tensor([new_generated_token]).unsqueeze(0)), dim=1)
 
         new_tokens_left -= 1
@@ -259,33 +251,28 @@ def decode(
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg):
-    print(cfg)
-    # print(cfg.data.train_path)
+    torch.manual_seed(cfg.training_params.seed)
+
     train_np_array = np.load(cfg.data.train_path, mmap_mode="r")  # same as we saved
     run = wandb.init(project=cfg.logging.project) if cfg.logging.use_wandb else None
-    # print(len(train_np_array))  # >> 555917109
-    # print(max(train_np_array))  # >> 31999
-
-    # with open("/Users/tr3n1ttty/code projects/preps/cs 336/stanford-cs336-assignment1-basics/data/results/TinyStoriesV2-train-bpe_tokenizer-vocab.pkl", "rb") as f:
-    #     import pickle
-    #     tokenizer_vocab = pickle.load(f)
-
-    # print("tokenizer vocab size: ", len(tokenizer_vocab))
 
     device = torch.device(cfg.run_params.device)
-    # print("dtype: ", cfg.run_params.dtype)
-    # dtype = torch.dtype(cfg.run_params.dtype)
+    if cfg.run_params.dtype in DTYPES_MAPPING:
+        dtype = DTYPES_MAPPING[cfg.run_params.dtype]
+    else:
+        raise ValueError(f"This dtype {cfg.run_params.dtype} is not supported! Availible dtypes: {list(DTYPES_MAPPING.keys())}")
 
     run_dir = Path(HydraConfig.get().runtime.output_dir)
     run_name = f"{run_dir.parent.name}_{run_dir.name}"
     checkpoint_dir = run_dir.parent.parent / "checkpoints" / run_name
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    model = TransformerLM(**cfg.model, device=device)  # dtype=dtype,
-    run.watch(model, log="all", log_freq=cfg.run_params.validate_every)
+    model = TransformerLM(**cfg.model, device=device, dtype=dtype)
+    if cfg.logging.use_wandb:
+        run.watch(model, log="all", log_freq=cfg.run_params.validate_every)
+    
     optimizer = AdamW(model.parameters(), **cfg.optimizer)
     rng = np.random.default_rng(seed=cfg.training_params.seed)
-    # lr_scheduler = cosine_lr_schedulling()
 
     for step in trange(cfg.training_params.num_steps):
         input_batch, target_batch = data_loading(
@@ -302,6 +289,10 @@ def main(cfg):
         loss = cross_entropy(logits, target_batch)
         loss.backward()
 
+        current_lr = cosine_lr_schedulling(step, **cfg.lr_scheduler)
+        for group in optimizer.param_groups:
+            group["lr"] = current_lr
+
         gradient_clipping(model.parameters(), max_grad_norm=cfg.training_params.max_grad_norm)
         optimizer.step()
 
@@ -309,8 +300,14 @@ def main(cfg):
             print(f"Step {step + 1} loss=", loss.item())
             if run is not None:
                 run.log({"train/loss": loss.item(), "step": step + 1})
+                run.log({"current lr": current_lr, "step": step + 1})
+            else:
+                print(f"train/loss: {loss.item()}, step: {step + 1}")
+                print("current lr = ", current_lr)
+        
         if step % cfg.run_params.validate_every == 0:
             num_steps = 30
+            model.eval()
             mean_val_loss = calc_val_loss(
                 model, 
                 cfg.data.val_path, 
@@ -320,18 +317,21 @@ def main(cfg):
                 seed=cfg.training_params.seed,
                 num_steps=num_steps
             )
-            print(f"Step: {step + 1} val loss over {num_steps} steps: ", mean_val_loss.item())
+            model.train()
+
             if run is not None:
                 run.log({"val/loss": mean_val_loss.item(), "step": step + 1})
+            else:
+                print(f"val/loss: {mean_val_loss.item()}, step: {step + 1}")
 
         if step % cfg.run_params.save_every == 0:
             # example: outputs/checkpoints/2026-09-28_09-46-51/step_1000.pt
             checkpoint_path = checkpoint_dir / f"step_{step}.pt"
-            save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path)
+            save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path, rng=rng)
             print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
 
     checkpoint_path = checkpoint_dir / f"step_{step}.pt"
-    save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path)
+    save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path, rng=rng)
     print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
     
     if run is not None:
@@ -340,20 +340,16 @@ def main(cfg):
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def run_generate(cfg):
-    path_to_checkpoint = "outputs/checkpoints/2026-09-28_18-17-13/step_1000.pt"
+    path_to_checkpoint = "outputs/checkpoints/2026-09-30_21-42-50/step_4999.pt"
     device = torch.device(cfg.run_params.device)
 
     model = TransformerLM(**cfg.model, device=device)
-    # it = load_checkpoint(
-    #     src=path_to_checkpoint, 
-    #     model=model, 
-    #     optimizer=AdamW(model.parameters(), **cfg.optimizer)
-    # )
     state_dict = torch.load(path_to_checkpoint, weights_only=False)
     model.load_state_dict(state_dict["model_params"])
+    model.eval()
 
-    vocab_filepath = "/Users/tr3n1ttty/code projects/preps/cs 336/stanford-cs336-assignment1-basics/data/results/TinyStoriesV2-train-bpe_tokenizer-vocab.pkl"
-    merges_filepath = "/Users/tr3n1ttty/code projects/preps/cs 336/stanford-cs336-assignment1-basics/data/results/TinyStoriesV2-train-bpe_tokenizer-merges.pkl"
+    vocab_filepath = "./data/results/TinyStoriesV2-train-bpe_tokenizer-vocab.pkl"
+    merges_filepath = "./data/results/TinyStoriesV2-train-bpe_tokenizer-merges.pkl"
 
     with open(vocab_filepath, "rb") as f:
         import pickle
@@ -365,13 +361,11 @@ def run_generate(cfg):
         idx for idx, token in tokenizer_vocab.items()
         if token == b"<|endoftext|>"
     )
-    # print("Stop token id: ", stop_token_id)
 
-    token_ids = tokenizer.encode("Hello! My name is Nikita and ")
+    token_ids = tokenizer.encode(" ")
     input_prompt = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
 
     all_text = decode(model, input_prompt, stop_token_id, 30, 0.6, 0.9, context_length=cfg.model.context_length)
-    # print("all text: ", all_text)
     token_ids_all_text = [token_id.item() for token_id in all_text.squeeze()]
     print("generated text: ", tokenizer.decode(token_ids_all_text))
 

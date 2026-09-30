@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+
+lr_min: 1e-6
+lr_max: 3e-4
+T_warmup: 100
+T: 1000

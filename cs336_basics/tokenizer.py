@@ -354,8 +354,8 @@ if __name__ == "__main__":
     # need to create custom from file to load trained vocab and merges.. srry I can't check it now=(
     
     ts_path = "data/TinyStoriesV2-GPT4-train.txt"
-    ts_vobab_path = "data/results/owt-train-bpe_tokenizer-vocab.pkl"
-    ts_merges_path = "data/results/owt-train-bpe_tokenizer-merges.pkl"
+    ts_vobab_path = "data/results/TinyStoriesV2-train-bpe_tokenizer-vocab.pkl"
+    ts_merges_path = "data/results/TinyStoriesV2-train-bpe_tokenizer-merges.pkl"
     special_tokens = ["<|endoftext|>"]
     ts_tokenizer = Tokenizer.from_files(ts_vobab_path, ts_merges_path, special_tokens)
 
@@ -365,9 +365,9 @@ if __name__ == "__main__":
     ts_valid_path = "data/TinyStoriesV2-GPT4-valid.txt"
     ts_output_valid_path = "data/TinyStoriesV2-GPT4-valid-encoded.npy"
 
-    # encode_data(ts_valid_path, ts_vobab_path, ts_merges_path, ts_output_valid_path)
+    encode_data(ts_valid_path, ts_vobab_path, ts_merges_path, ts_output_valid_path)
 
     ts_train_path = "data/TinyStoriesV2-GPT4-train.txt"
     ts_output_train_path = "data/TinyStoriesV2-GPT4-train-encoded.npy"
 
-    encode_data(ts_train_path, ts_vobab_path, ts_merges_path, ts_output_train_path)
+    # encode_data(ts_train_path, ts_vobab_path, ts_merges_path, ts_output_train_path)

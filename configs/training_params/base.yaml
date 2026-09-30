@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+
+batch_size: 32
+seed: 666
+num_steps: 40000
+max_grad_norm: 1

@@ -1,0 +1,6 @@
+defaults:
+  - _self_
+
+train_path: data/TinyStoriesV2-GPT4-train-encoded.npy
+val_path: data/TinyStoriesV2-GPT4-valid-encoded.npy
+tokenizer_path: data/results/TinyStoriesV2-train-bpe_tokenizer.pkl

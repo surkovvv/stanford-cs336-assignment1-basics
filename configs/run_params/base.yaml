@@ -1,0 +1,9 @@
+defaults:
+  - _self_
+
+run_name: test
+device: mps
+dtype: float32
+log_every: 50
+validate_every: 500
+save_every: 5000

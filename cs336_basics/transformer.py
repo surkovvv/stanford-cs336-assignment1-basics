@@ -241,7 +241,8 @@ class TransformerBlock(nn.Module):
         max_seq_len: int,
         theta: float,
         device: torch.device | None  = None, 
-        dtype: torch.dtype | None = None
+        dtype: torch.dtype | None = None,
+        mode: str = "pre"
         ):
         super().__init__()
 
@@ -249,10 +250,21 @@ class TransformerBlock(nn.Module):
         self.ffn = SwiGLUFFN(d_model, d_ff, device, dtype)
         self.attention_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.mode = mode
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = x + self.mhsa(self.attention_prenorm(x))
-        z = y + self.ffn(self.ffn_prenorm(y))
+        if self.mode == "pre":
+            y = x + self.mhsa(self.attention_prenorm(x))
+            z = y + self.ffn(self.ffn_prenorm(y))
+        elif self.mode == "post":
+            y = self.attention_prenorm(x + self.mhsa(x))
+            z = self.ffn_prenorm(y + self.ffn(y))
+        elif self.mode == "no":
+            y = x + self.mhsa(x) 
+            z = y + self.ffn(y)
+        else:
+            raise ValueError("Unknown mode! expected one of `pre`, `post`, `no`")
+        
         return z
 
 
@@ -266,7 +278,8 @@ class TransformerLM(nn.Module):
         context_length: int,
         num_layers: int,
         device: torch.device | None  = None, 
-        dtype: torch.dtype | None = None
+        dtype: torch.dtype | None = None,
+        mode: str = "pre"
     ):
         super().__init__()
 
@@ -285,7 +298,8 @@ class TransformerLM(nn.Module):
                 context_length,
                 theta,
                 device,
-                dtype
+                dtype,
+                mode
             )
             for _ in range(num_layers)
         ])

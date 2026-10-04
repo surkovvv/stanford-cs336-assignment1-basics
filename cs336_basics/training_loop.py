@@ -112,6 +112,7 @@ class ModelParams:
     vocab_size: int 
     context_length: int
     num_layers: int
+    mode: str
 
 @dataclass
 class OptimizerParams:

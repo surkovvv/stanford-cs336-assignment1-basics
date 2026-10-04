@@ -90,3 +90,13 @@ Finally, I've tried to tweak batch sizes:
 
 full `val/loss` means we took around the same number of tokens as there are in the all val set. 
 Here, we can clearly see that even though larger batch sizes are quicker, but.. the quality is not about the speed.
+
+
+## 7.3 ablations:
+
+Plan:
+1. Layer normalization:
+    1.1 no rmsnorm
+    1.2 post-norm
+2. NoPE
+3. SiLU

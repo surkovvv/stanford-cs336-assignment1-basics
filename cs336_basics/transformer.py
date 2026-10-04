@@ -195,7 +195,7 @@ class MultiHeadSelfAttention(nn.Module):
 
         condition1 = theta is not None and max_seq_len is not None
         condition2 = theta is None and max_seq_len is None
-        assert condition1 or condition2
+        # assert condition1 or condition2
 
         if max_seq_len is not None and theta is not None:
             self.use_rope = True

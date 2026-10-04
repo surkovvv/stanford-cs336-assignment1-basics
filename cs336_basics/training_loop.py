@@ -108,7 +108,7 @@ class ModelParams:
     d_model: int
     num_heads: int
     d_ff: int
-    theta: float
+    theta: float | None
     vocab_size: int 
     context_length: int
     num_layers: int

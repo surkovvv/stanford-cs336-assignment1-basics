@@ -148,6 +148,8 @@ class RunParams:
     log_every: int
     validate_every: int
     save_every: int
+    val_batch_size: int
+    regular_val_steps_ratio: float
 
 @dataclass
 class LoggingParams:
@@ -254,6 +256,11 @@ def main(cfg):
     torch.manual_seed(cfg.training_params.seed)
 
     train_np_array = np.load(cfg.data.train_path, mmap_mode="r")  # same as we saved
+    val_np_array = np.load(cfg.data.val_path, mmap_mode="r")
+    val_array_len = len(val_np_array)
+    total_steps_for_current_config = val_array_len // (cfg.model.context_length * cfg.run_params.val_batch_size)
+    regular_val_steps = int(cfg.run_params.regular_val_steps_ratio * total_steps_for_current_config)
+    del val_np_array
     run = wandb.init(project=cfg.logging.project) if cfg.logging.use_wandb else None
 
     device = torch.device(cfg.run_params.device)
@@ -306,13 +313,13 @@ def main(cfg):
                 print("current lr = ", current_lr)
         
         if step % cfg.run_params.validate_every == 0:
-            num_steps = 30
+            num_steps = regular_val_steps
             model.eval()
             mean_val_loss = calc_val_loss(
                 model, 
                 cfg.data.val_path, 
                 context_length=cfg.model.context_length, 
-                batch_size=cfg.training_params.batch_size, 
+                batch_size=cfg.run_params.val_batch_size, 
                 device=device,
                 seed=cfg.training_params.seed,
                 num_steps=num_steps
@@ -333,6 +340,20 @@ def main(cfg):
     checkpoint_path = checkpoint_dir / f"step_{step}.pt"
     save_checkpoint(model, optimizer, iteration=step, out=checkpoint_path, rng=rng)
     print(f"Step: {step + 1} model checkpoint was saved! Path: ", checkpoint_path)
+
+    num_steps = total_steps_for_current_config
+    model.eval()
+    mean_val_loss = calc_val_loss(
+        model, 
+        cfg.data.val_path, 
+        context_length=cfg.model.context_length, 
+        batch_size=cfg.run_params.val_batch_size, 
+        device=device,
+        seed=cfg.training_params.seed,
+        num_steps=num_steps
+    )
+    run.log({"final_full_val_loss": mean_val_loss.item(), "step": step + 1})
+    print(f"step: {step + 1} FULL val loss: ", mean_val_loss.item())
     
     if run is not None:
         run.finish()

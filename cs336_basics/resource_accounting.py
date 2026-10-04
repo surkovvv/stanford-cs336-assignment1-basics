@@ -193,12 +193,12 @@ def calc_flops(config: ModelConfig, print_extra: bool = False):
 
 gpt2_xl_config = ModelConfig(
     name="gpt2-xl",
-    vocab_size = 50257,
-    context_length = 1024,
-    num_layers = 48,
-    d_model = 1600,
-    num_heads = 25,
-    d_ff = 4288
+    vocab_size = 10000, # 50257,
+    context_length = 256, #1024,
+    num_layers = 4, # 48,
+    d_model = 512, # 1600,
+    num_heads =16,  # 25,
+    d_ff = 1344 # 4288
 )
 
 

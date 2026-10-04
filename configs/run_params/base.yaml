@@ -7,3 +7,5 @@ dtype: fp32
 log_every: 50
 validate_every: 500
 save_every: 5000
+val_batch_size: 32
+regular_val_steps_ratio: 0.1

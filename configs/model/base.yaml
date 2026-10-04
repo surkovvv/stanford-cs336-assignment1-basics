@@ -8,4 +8,4 @@ theta: 10000.0
 vocab_size: 10000
 context_length: 256
 num_layers: 4
-
+activation: silu

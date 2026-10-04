@@ -78,6 +78,10 @@ class RMSNorm(nn.Module):
         rmsnorm = rmsnorm.to(in_dtype)
         return rmsnorm
 
+def silu(x: torch.Tensor) -> torch.Tensor:
+    result = x * torch.sigmoid(x)
+    return result
+    
 
 class SwiGLUFFN(nn.Module):
     def __init__(self, 
@@ -94,17 +98,37 @@ class SwiGLUFFN(nn.Module):
         self.W_inner = create_and_init_weights(d_model, d_ff, dtype=dtype, device=device)
         self.W_outer = create_and_init_weights(d_ff, d_model, dtype=dtype, device=device)
 
-    def silu(self, x: torch.Tensor) -> torch.Tensor:
-        result = x * torch.sigmoid(x)
-        return result
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         inside_silu = einsum(self.W_silu, x, 'd_ff d_model, ... d_model -> ... d_ff')
-        silu_res = self.silu(inside_silu)
+        silu_res = silu(inside_silu)
         near_silu = einsum(self.W_inner, x, 'd_ff d_model, ... d_model -> ... d_ff')
         inside = silu_res * near_silu
         result = einsum(self.W_outer, inside, 'd_model d_ff, ... d_ff -> ... d_model')
         return result
+
+
+class SiLUFFN(nn.Module):
+    def __init__(self, 
+        d_model: int,
+        d_ff: int | None = None,
+        device: torch.device | None  = None, 
+        dtype: torch.dtype | None = None
+    ):
+        super().__init__()
+        if d_ff is None:
+            d_ff = 4 * d_model
+        
+        self.W_inner = create_and_init_weights(d_model, d_ff, dtype=dtype, device=device)
+        self.W_outer = create_and_init_weights(d_ff, d_model, dtype=dtype, device=device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        inside_silu = einsum(self.W_inner, x, 'd_ff d_model, ... d_model -> ... d_ff')
+        silu_result = silu(inside_silu)
+        result = einsum(self.W_outer, silu_result, 'd_model d_ff, ... d_ff -> ... d_model')
+        return result
+
+
+ACTIVATION_MAPPING = {"swiglu": SwiGLUFFN, "silu": SiLUFFN}
 
 
 class RotaryPositionalEmbedding(nn.Module):
@@ -241,12 +265,13 @@ class TransformerBlock(nn.Module):
         max_seq_len: int,
         theta: float,
         device: torch.device | None  = None, 
-        dtype: torch.dtype | None = None
+        dtype: torch.dtype | None = None,
+        activation: str = "swiglu"
         ):
         super().__init__()
 
         self.mhsa = MultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, device, dtype)
-        self.ffn = SwiGLUFFN(d_model, d_ff, device, dtype)
+        self.ffn = ACTIVATION_MAPPING[activation](d_model, d_ff, device, dtype)
         self.attention_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
         self.ffn_prenorm = RMSNorm(d_model, device=device, dtype=dtype)
 
@@ -266,7 +291,8 @@ class TransformerLM(nn.Module):
         context_length: int,
         num_layers: int,
         device: torch.device | None  = None, 
-        dtype: torch.dtype | None = None
+        dtype: torch.dtype | None = None,
+        activation: str = "swiglu"
     ):
         super().__init__()
 
@@ -285,7 +311,8 @@ class TransformerLM(nn.Module):
                 context_length,
                 theta,
                 device,
-                dtype
+                dtype,
+                activation
             )
             for _ in range(num_layers)
         ])

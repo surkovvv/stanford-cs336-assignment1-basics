@@ -166,67 +166,82 @@ def calc_and_print_trainable_params(config: ModelConfig, print_extra: bool = Fal
     return total_params
 
 
-num_params_embeddings = calc_size([vocab_size, d_model])
-num_params_norm = calc_size([d_model])
-num_params_mha = calc_size([d_model, d_model]) * 4
-num_params_ffn = calc_size([d_ff, d_model]) * 3
-num_params_lm_head = calc_size([d_model, vocab_size])
-
-# layers = [[d_model] * 2 + [d_model, d_model] * 4 + [d_ff, d_model] * 3] * num_layers
-print("embeddings has ", num_params_embeddings, " params")
-print("norm has ", num_params_norm, " params")
-print("mha has ", num_params_mha // 4, " params")
-print("ffn has ", num_params_ffn // 3, " params")
-print("lm head has ", num_params_lm_head, " params")
-
-answer_a = num_params_embeddings + (2 * num_layers + 1) * num_params_norm + num_layers * (num_params_mha + num_params_ffn) + num_params_lm_head
-print(answer_a, " = ", answer_a / 10 ** 9, "billions params")
-print("gpt2-XL requires ", answer_a * 4 / 10 ** 9, "GB for fp32(4 bytes)")
-
-# from cs336_basics.transformer import TransformerLM
-
-# transformer = TransformerLM(
-#     d_model,
-#     num_heads,
-#     d_ff,
-#     1000,
-#     vocab_size,
-#     context_length,
-#     num_layers
-# )
-
-# total_params = 0
-# for name, p in transformer.named_parameters():
-#     if p.requires_grad == True:
-#         total_params += p.numel()
-#         # print(name, " has ", p.numel(), " params")
-
-# print(total_params, " = ", total_params // 10 ** 9, "billions params")
-
-# ============================================
-batch_size = 1
-
-FFN_FLOPs = (2 * batch_size * context_length * d_ff * d_model) * 3
-proj_FLOPs = (2 * batch_size * context_length * d_model * d_model) * 4
-qk_presoftmax_FLOPs = 2 * batch_size * context_length * context_length * d_model
-sftmx_values_FLOPs = 2 * batch_size * num_heads * context_length * context_length * (d_model // num_heads)
-lm_head_FLOPs = 2 * batch_size * context_length * d_model * vocab_size
-total_FLOPs = num_layers * (FFN_FLOPs + proj_FLOPs + qk_presoftmax_FLOPs + sftmx_values_FLOPs) + lm_head_FLOPs
-print("FFN_FLOPs ", FFN_FLOPs / 10 ** 9 * num_layers)
-print("proj_FLOPs ", proj_FLOPs / 10 ** 9 * num_layers)
-print("kv_presoftmax_FLOPs ", qk_presoftmax_FLOPs / 10 ** 9 * num_layers)
-print("sftmx_values_FLOPs ", sftmx_values_FLOPs / 10 ** 9 * num_layers)
-print("lm_head_FLOPs ", lm_head_FLOPs / 10 ** 9)
-print("TOTAL number of GFLOPs(bs = 1, seq_len = context_len): ", total_FLOPs / 10 ** 9)
-print("~" * 66)
-
 def calc_flops(config: ModelConfig, print_extra: bool = False):
+        batch_size = 1
+        vocab_size = config.vocab_size
+        num_layers = config.num_layers
+        d_model = config.d_model
+        context_length = config.context_length
+        d_ff = config.d_ff if config.d_ff is not None else (8 * d_model // 3)
+
+        FFN_FLOPs = (2 * batch_size * context_length * d_ff * d_model) * 3
+        proj_FLOPs = (2 * batch_size * context_length * d_model * d_model) * 4
+        qk_presoftmax_FLOPs = 2 * batch_size * context_length * context_length * d_model
+        sftmx_values_FLOPs = 2 * batch_size * num_heads * context_length * context_length * (d_model // num_heads)
+        lm_head_FLOPs = 2 * batch_size * context_length * d_model * vocab_size
+        total_FLOPs = num_layers * (FFN_FLOPs + proj_FLOPs + qk_presoftmax_FLOPs + sftmx_values_FLOPs) + lm_head_FLOPs
+        if print_extra:
+            print("FFN_FLOPs percent: ", num_layers * FFN_FLOPs / total_FLOPs * 100, "%")
+            print("proj_FLOPs percent: ", num_layers * proj_FLOPs / total_FLOPs * 100, "%")
+            print("qk_presoftmax_FLOPs percent: ", num_layers * qk_presoftmax_FLOPs / total_FLOPs * 100, "%")
+            print("sftmx_values_FLOPs percent: ", num_layers * sftmx_values_FLOPs / total_FLOPs * 100, "%")
+            print("lm_head_FLOPs percent: ", lm_head_FLOPs / total_FLOPs * 100, "%")
+            print("TOTAL number of GFLOPs(bs = 1, seq_len = context_len): ", total_FLOPs / 10 ** 9)
+
+        return total_FLOPs
+
+
+gpt2_xl_config = ModelConfig(
+    name="gpt2-xl",
+    vocab_size = 10000, # 50257,
+    context_length = 256, #1024,
+    num_layers = 4, # 48,
+    d_model = 512, # 1600,
+    num_heads =16,  # 25,
+    d_ff = 1344 # 4288
+)
+
+
+if __name__ == "__main__":
+    num_params_embeddings = calc_size([vocab_size, d_model])
+    num_params_norm = calc_size([d_model])
+    num_params_mha = calc_size([d_model, d_model]) * 4
+    num_params_ffn = calc_size([d_ff, d_model]) * 3
+    num_params_lm_head = calc_size([d_model, vocab_size])
+
+    # layers = [[d_model] * 2 + [d_model, d_model] * 4 + [d_ff, d_model] * 3] * num_layers
+    print("embeddings has ", num_params_embeddings, " params")
+    print("norm has ", num_params_norm, " params")
+    print("mha has ", num_params_mha // 4, " params")
+    print("ffn has ", num_params_ffn // 3, " params")
+    print("lm head has ", num_params_lm_head, " params")
+
+    answer_a = num_params_embeddings + (2 * num_layers + 1) * num_params_norm + num_layers * (num_params_mha + num_params_ffn) + num_params_lm_head
+    print(answer_a, " = ", answer_a / 10 ** 9, "billions params")
+    print("gpt2-XL requires ", answer_a * 4 / 10 ** 9, "GB for fp32(4 bytes)")
+
+    # from cs336_basics.transformer import TransformerLM
+
+    # transformer = TransformerLM(
+    #     d_model,
+    #     num_heads,
+    #     d_ff,
+    #     1000,
+    #     vocab_size,
+    #     context_length,
+    #     num_layers
+    # )
+
+    # total_params = 0
+    # for name, p in transformer.named_parameters():
+    #     if p.requires_grad == True:
+    #         total_params += p.numel()
+    #         # print(name, " has ", p.numel(), " params")
+
+    # print(total_params, " = ", total_params // 10 ** 9, "billions params")
+
+    # ============================================
     batch_size = 1
-    vocab_size = config.vocab_size
-    num_layers = config.num_layers
-    d_model = config.d_model
-    context_length = config.context_length
-    d_ff = config.d_ff if config.d_ff is not None else (8 * d_model // 3)
 
     FFN_FLOPs = (2 * batch_size * context_length * d_ff * d_model) * 3
     proj_FLOPs = (2 * batch_size * context_length * d_model * d_model) * 4
@@ -234,72 +249,61 @@ def calc_flops(config: ModelConfig, print_extra: bool = False):
     sftmx_values_FLOPs = 2 * batch_size * num_heads * context_length * context_length * (d_model // num_heads)
     lm_head_FLOPs = 2 * batch_size * context_length * d_model * vocab_size
     total_FLOPs = num_layers * (FFN_FLOPs + proj_FLOPs + qk_presoftmax_FLOPs + sftmx_values_FLOPs) + lm_head_FLOPs
-    if print_extra:
-        print("FFN_FLOPs percent: ", num_layers * FFN_FLOPs / total_FLOPs * 100, "%")
-        print("proj_FLOPs percent: ", num_layers * proj_FLOPs / total_FLOPs * 100, "%")
-        print("qk_presoftmax_FLOPs percent: ", num_layers * qk_presoftmax_FLOPs / total_FLOPs * 100, "%")
-        print("sftmx_values_FLOPs percent: ", num_layers * sftmx_values_FLOPs / total_FLOPs * 100, "%")
-        print("lm_head_FLOPs percent: ", lm_head_FLOPs / total_FLOPs * 100, "%")
-        print("TOTAL number of GFLOPs(bs = 1, seq_len = context_len): ", total_FLOPs / 10 ** 9)
+    print("FFN_FLOPs ", FFN_FLOPs / 10 ** 9 * num_layers)
+    print("proj_FLOPs ", proj_FLOPs / 10 ** 9 * num_layers)
+    print("kv_presoftmax_FLOPs ", qk_presoftmax_FLOPs / 10 ** 9 * num_layers)
+    print("sftmx_values_FLOPs ", sftmx_values_FLOPs / 10 ** 9 * num_layers)
+    print("lm_head_FLOPs ", lm_head_FLOPs / 10 ** 9)
+    print("TOTAL number of GFLOPs(bs = 1, seq_len = context_len): ", total_FLOPs / 10 ** 9)
+    print("~" * 66)
 
-    return total_FLOPs
+    gpt2_small_config = ModelConfig(
+        name="gpt2-small",
+        num_layers=12,
+        d_model=768,
+        num_heads=12,
+        context_length=1024
+    )
+    total_params_small = calc_and_print_trainable_params(gpt2_small_config)
+    print("total params for gpt2-small: ", total_params_small / 10 ** 9, " billion params")
+    total_flops_small = calc_flops(gpt2_small_config, print_extra=True)
+    print("~" * 66)
 
+    gpt2_medium_config = ModelConfig(
+        name="gpt2-medium",
+        num_layers=24,
+        d_model=1024,
+        num_heads=16,
+        context_length=1024
+    )
+    total_params_medium = calc_and_print_trainable_params(gpt2_medium_config)
+    print("total params for gpt2-medium: ", total_params_medium / 10 ** 9, " billion params")
+    total_flops_medium = calc_flops(gpt2_medium_config, print_extra=True)
+    print("~" * 66)
 
-gpt2_small_config = ModelConfig(
-    name="gpt2-small",
-    num_layers=12,
-    d_model=768,
-    num_heads=12,
-    context_length=1024
-)
-total_params_small = calc_and_print_trainable_params(gpt2_small_config)
-print("total params for gpt2-small: ", total_params_small / 10 ** 9, " billion params")
-total_flops_small = calc_flops(gpt2_small_config, print_extra=True)
-print("~" * 66)
+    gpt2_large_config = ModelConfig(
+        name="gpt2-large",
+        num_layers=36,
+        d_model=1280,
+        num_heads=20,
+        context_length=1024
+    )
+    total_params_large = calc_and_print_trainable_params(gpt2_large_config)
+    print("total params for gpt2-large: ", total_params_large / 10 ** 9, " billion params")
+    total_flops_large = calc_flops(gpt2_large_config, print_extra=True)
+    print("~" * 66)
 
-gpt2_medium_config = ModelConfig(
-    name="gpt2-medium",
-    num_layers=24,
-    d_model=1024,
-    num_heads=16,
-    context_length=1024
-)
-total_params_medium = calc_and_print_trainable_params(gpt2_medium_config)
-print("total params for gpt2-medium: ", total_params_medium / 10 ** 9, " billion params")
-total_flops_medium = calc_flops(gpt2_medium_config, print_extra=True)
-print("~" * 66)
+    
+    total_flops_xl = calc_flops(gpt2_xl_config, print_extra=True)
+    print("~" * 66)
 
-gpt2_large_config = ModelConfig(
-    name="gpt2-large",
-    num_layers=36,
-    d_model=1280,
-    num_heads=20,
-    context_length=1024
-)
-total_params_large = calc_and_print_trainable_params(gpt2_large_config)
-print("total params for gpt2-large: ", total_params_large / 10 ** 9, " billion params")
-total_flops_large = calc_flops(gpt2_large_config, print_extra=True)
-print("~" * 66)
-
-gpt2_xl_config = ModelConfig(
-    name="gpt2-xl",
-    vocab_size = 50257,
-    context_length = 1024,
-    num_layers = 48,
-    d_model = 1600,
-    num_heads = 25,
-    d_ff = 4288
-)
-total_flops_xl = calc_flops(gpt2_xl_config, print_extra=True)
-print("~" * 66)
-
-gpt2_xl_config_long_context = ModelConfig(
-    name="gpt2-xl-long-context",
-    vocab_size = 50257,
-    context_length = 16384,
-    num_layers = 48,
-    d_model = 1600,
-    num_heads = 25,
-    d_ff = 4288
-)
-total_flops_xl_long_context = calc_flops(gpt2_xl_config_long_context, print_extra=True)
+    gpt2_xl_config_long_context = ModelConfig(
+        name="gpt2-xl-long-context",
+        vocab_size = 50257,
+        context_length = 16384,
+        num_layers = 48,
+        d_model = 1600,
+        num_heads = 25,
+        d_ff = 4288
+    )
+    total_flops_xl_long_context = calc_flops(gpt2_xl_config_long_context, print_extra=True)

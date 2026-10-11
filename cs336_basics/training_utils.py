@@ -2,7 +2,7 @@ import torch
 from torch.optim import Optimizer
 from typing import Callable
 import math
-
+from cs336_basics.resource_accounting import ModelConfig, gpt2_xl_config
 
 def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
@@ -44,16 +44,6 @@ class SGD(Optimizer):
 
         return loss
 
-torch.manual_seed(666)
-weights = torch.nn.Parameter(5 * torch.randn((10, 10)))
-# opt = SGD([weights], lr=1)
-
-# for t in range(100):
-#     opt.zero_grad()
-#     loss = (weights ** 2).mean()
-#     print(loss.cpu().item())
-#     loss.backward()
-#     opt.step()
 
 def try_different_lrs(lr, n=10):
     opt = SGD([weights], lr=1)
@@ -65,11 +55,6 @@ def try_different_lrs(lr, n=10):
         loss.backward()
         opt.step()
 
-# try_different_lrs(lr=1e1)  # >> 17.85977554321289 -> 14.779157638549805, decrease only
-# print('~' * 66)
-# try_different_lrs(lr=1e2)  # >> 14.592806816101074 -> 12.075705528259277, decrease only
-# print('~' * 66)
-# try_different_lrs(lr=1e3)  # >> 11.923442840576172 -> 9.866779327392578, decrease only
 
 class AdamW(Optimizer):
     def __init__(self, params, lr: float, betas: tuple[float, float], eps: float, weight_decay: float):
@@ -161,7 +146,6 @@ w2: bsd (* num_layers)
 output_embedding: batch_size * seq_len * vocab_size
 cross-entropy on logits: 1
 """
-from cs336_basics.resource_accounting import ModelConfig, gpt2_xl_config
 
 def calc_total_number_of_params(config: ModelConfig) -> int:
     vocab_size = config.vocab_size
@@ -195,67 +179,6 @@ def calc_total_number_of_activations(config: ModelConfig, batch_size: int = 1) -
     return total_number_of_activations
 
 
-number_of_params = calc_total_number_of_params(gpt2_xl_config)
-print("Number of params for XL gpt2: ", number_of_params)
-total_memory_gpt2_xl_bytes = 4 * 4 * number_of_params
-print("Memory needed for XL gpt2 params(weight + grad + optimizer), fp32 ", total_memory_gpt2_xl_bytes, " bytes")
-
-number_of_activations_bs1 = calc_total_number_of_activations(gpt2_xl_config, batch_size=1)
-print("Number of activations for XL gpt2, bs=1: ", number_of_activations_bs1)
-print("Memory needed for XL gpt2 activations, fp32, bs=1 ", 4 * number_of_activations_bs1, " bytes")
-
-bs = 32
-number_of_activations_bs32 = calc_total_number_of_activations(gpt2_xl_config, batch_size=bs)
-print(f"Number of activations for XL gpt2, bs={bs}: ", number_of_activations_bs32)
-print(f"Memory needed for XL gpt2 activations, fp32, bs={bs} ", 4 * number_of_activations_bs32, " bytes")
-
-space_total = 80 * 10 ** 9  # 80GB
-space_for_activations = space_total - total_memory_gpt2_xl_bytes
-vocab_size = gpt2_xl_config.vocab_size
-d_model = gpt2_xl_config.d_model
-num_layers = gpt2_xl_config.num_layers
-num_heads = gpt2_xl_config.num_heads
-d_ff = gpt2_xl_config.d_ff if gpt2_xl_config.d_ff is not None else 8 * d_model // 3
-seq_len = gpt2_xl_config.context_length
-
-sd = seq_len * d_model
-a = (
-    sd * (2 * num_layers + 1) +
-    (6 * sd + 2 * num_heads * seq_len * seq_len + 4 * seq_len * d_ff) * num_layers + 
-    seq_len * vocab_size 
-)
-b = 4* number_of_params + 1
-print("a = ", 4 * a, " bytes")
-print("b = ", 4 * b, " bytes")
-max_batch_size = (space_total // 4 - b) // a
-print("max batch size for gpt XL:", max_batch_size)  # >> 3
-
-# How many FLOPs does running one step of AdamW take?
-"""
-p.data -= lr * weight_decay * p.data -> [suppose p just fp32 number] -> 2 ops
-m = beta1 * m + (1 - beta1) * grad -> 1 + 1 + 1 -> 3 ops
-v = beta2 * v + (1 - beta2) * grad ** 2 -> 1 + 2 + 1 -> 4 ops
-p.data -= adjusted_lr * m / (torch.sqrt(v) + eps) -> 1 + 1 + 1 + 1 + 1 -> 5 ops
-Total: 14 ops per param
-as we calculated the total number of params via calc_total_number_of_params()..
-we can say, that each step is just 14 * calc_total_number_of_params() FLOPs = 22966339200 FLOPs
-"""
-
-print(14 * calc_total_number_of_params(gpt2_xl_config))
-
-adamw_flops = 14 * calc_total_number_of_params(gpt2_xl_config)
-forward_flops = 3_516_769_894_400  # Loot at resource accounting code
-backward_flops = 2 * forward_flops
-
-flop_per_second = 0.5 * 495 * 10 ** 12 # 495 - from H100 nvidia specs
-steps = 400 * 1000
-
-total_FLOPs = steps * (1024 * forward_flops + 1024 * backward_flops + adamw_flops)
-time_in_seconds = total_FLOPs / flop_per_second
-print(f"Time: {time_in_seconds}s ~= {time_in_seconds // 3600}h ~= {time_in_seconds // 3600 // 24} days")
-# >> Time: 17460266.799088486s ~= 4850.0h ~= 202.0 days
-
-
 def cosine_lr_schedulling(t: int, lr_min: float, lr_max: float, T_w: int, T_c: int) -> float:
     if t < T_w:
         current_lr = t / T_w * lr_max
@@ -285,4 +208,84 @@ def gradient_clipping(list_of_params: list[torch.nn.Parameter], max_grad_norm: f
                 continue
 
             param.grad *= max_grad_norm / (total_grad_norm + eps)
+
+
+if __name__ == "__main__":
+    torch.manual_seed(666)
+    weights = torch.nn.Parameter(5 * torch.randn((10, 10)))
+    # opt = SGD([weights], lr=1)
+
+    # for t in range(100):
+    #     opt.zero_grad()
+    #     loss = (weights ** 2).mean()
+    #     print(loss.cpu().item())
+    #     loss.backward()
+    #     opt.step()
+
+    # try_different_lrs(lr=1e1)  # >> 17.85977554321289 -> 14.779157638549805, decrease only
+    # print('~' * 66)
+    # try_different_lrs(lr=1e2)  # >> 14.592806816101074 -> 12.075705528259277, decrease only
+    # print('~' * 66)
+    # try_different_lrs(lr=1e3)  # >> 11.923442840576172 -> 9.866779327392578, decrease only
+
+    number_of_params = calc_total_number_of_params(gpt2_xl_config)
+    print("Number of params for XL gpt2: ", number_of_params)
+    total_memory_gpt2_xl_bytes = 4 * 4 * number_of_params
+    print("Memory needed for XL gpt2 params(weight + grad + optimizer), fp32 ", total_memory_gpt2_xl_bytes, " bytes")
+
+    number_of_activations_bs1 = calc_total_number_of_activations(gpt2_xl_config, batch_size=1)
+    print("Number of activations for XL gpt2, bs=1: ", number_of_activations_bs1)
+    print("Memory needed for XL gpt2 activations, fp32, bs=1 ", 4 * number_of_activations_bs1, " bytes")
+
+    bs = 32
+    number_of_activations_bs32 = calc_total_number_of_activations(gpt2_xl_config, batch_size=bs)
+    print(f"Number of activations for XL gpt2, bs={bs}: ", number_of_activations_bs32)
+    print(f"Memory needed for XL gpt2 activations, fp32, bs={bs} ", 4 * number_of_activations_bs32, " bytes")
+
+    space_total = 80 * 10 ** 9  # 80GB
+    space_for_activations = space_total - total_memory_gpt2_xl_bytes
+    vocab_size = gpt2_xl_config.vocab_size
+    d_model = gpt2_xl_config.d_model
+    num_layers = gpt2_xl_config.num_layers
+    num_heads = gpt2_xl_config.num_heads
+    d_ff = gpt2_xl_config.d_ff if gpt2_xl_config.d_ff is not None else 8 * d_model // 3
+    seq_len = gpt2_xl_config.context_length
+
+    sd = seq_len * d_model
+    a = (
+        sd * (2 * num_layers + 1) +
+        (6 * sd + 2 * num_heads * seq_len * seq_len + 4 * seq_len * d_ff) * num_layers + 
+        seq_len * vocab_size 
+    )
+    b = 4* number_of_params + 1
+    print("a = ", 4 * a, " bytes")
+    print("b = ", 4 * b, " bytes")
+    max_batch_size = (space_total // 4 - b) // a
+    print("max batch size for gpt XL:", max_batch_size)  # >> 3
+
+    # How many FLOPs does running one step of AdamW take?
+    """
+    p.data -= lr * weight_decay * p.data -> [suppose p just fp32 number] -> 2 ops
+    m = beta1 * m + (1 - beta1) * grad -> 1 + 1 + 1 -> 3 ops
+    v = beta2 * v + (1 - beta2) * grad ** 2 -> 1 + 2 + 1 -> 4 ops
+    p.data -= adjusted_lr * m / (torch.sqrt(v) + eps) -> 1 + 1 + 1 + 1 + 1 -> 5 ops
+    Total: 14 ops per param
+    as we calculated the total number of params via calc_total_number_of_params()..
+    we can say, that each step is just 14 * calc_total_number_of_params() FLOPs = 22966339200 FLOPs
+    """
+
+    print(14 * calc_total_number_of_params(gpt2_xl_config))
+
+    adamw_flops = 14 * calc_total_number_of_params(gpt2_xl_config)
+    forward_flops = 3_516_769_894_400  # Loot at resource accounting code
+    backward_flops = 2 * forward_flops
+
+    flop_per_second = 0.5 * 495 * 10 ** 12 # 495 - from H100 nvidia specs
+    steps = 400 * 1000
+
+    total_FLOPs = steps * (1024 * forward_flops + 1024 * backward_flops + adamw_flops)
+    time_in_seconds = total_FLOPs / flop_per_second
+    print(f"Time: {time_in_seconds}s ~= {time_in_seconds // 3600}h ~= {time_in_seconds // 3600 // 24} days")
+    # >> Time: 17460266.799088486s ~= 4850.0h ~= 202.0 days
+
     
